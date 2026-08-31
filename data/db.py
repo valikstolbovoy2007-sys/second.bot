@@ -224,6 +224,7 @@ CREATE INDEX IF NOT EXISTS admin_messages_fb_idx ON admin_messages(feedback_id);
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_start INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_step  INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS working_hours TEXT;
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS maps_url TEXT;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и
 -- удаляем колонку. Обе операции идемпотентны — повторный запуск ничего
