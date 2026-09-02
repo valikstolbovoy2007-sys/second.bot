@@ -12,6 +12,7 @@ class AdminRow:
     added_by: int | None
     added_at: datetime
     note: str | None
+    username: str | None
 
 
 # Admin filters fire on every callback; the admin set is small and rarely
@@ -50,7 +51,12 @@ async def is_super_admin(tg_id: int) -> bool:
 async def list_admins() -> list[AdminRow]:
     async with pool().acquire() as conn:
         rows = await conn.fetch(
-            "SELECT tg_id, role, added_by, added_at, note FROM admins ORDER BY role DESC, added_at"
+            """
+            SELECT a.tg_id, a.role, a.added_by, a.added_at, a.note, u.username
+            FROM admins a
+            LEFT JOIN users u ON u.tg_id = a.tg_id
+            ORDER BY a.role DESC, a.added_at
+            """
         )
     return [AdminRow(**dict(r)) for r in rows]
 

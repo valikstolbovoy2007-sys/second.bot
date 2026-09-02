@@ -57,8 +57,9 @@ async def cb_list(call: CallbackQuery, callback_data: AdmCb | None = None) -> No
     for a in admins:
         cnt = len(await assigned_shop_ids(a.tg_id))
         emoji = "🛡" if a.role == "super_admin" else "👤"
+        who = f"@{a.username}" if a.username else str(a.tg_id)
         rows.append([InlineKeyboardButton(
-            text=f"{emoji} {a.tg_id} • {a.role} • {cnt} магаз",
+            text=f"{emoji} {who} • {a.role} • {cnt} магаз",
             callback_data=AdmCb(action="card", tg_id=a.tg_id).pack(),
         )])
     rows.append([InlineKeyboardButton(text="➕ Добавить админа", callback_data=AdmCb(action="add").pack())])
@@ -117,8 +118,9 @@ async def cb_card(call: CallbackQuery, callback_data: AdmCb) -> None:
     shop_ids = await assigned_shop_ids(a.tg_id)
     all_shops = {s.id: s for s in await list_all_shops()}
     names = [all_shops[i].name for i in shop_ids if i in all_shops]
+    who = f"@{html.escape(a.username)} ({a.tg_id})" if a.username else str(a.tg_id)
     text = (
-        f"👤 <b>{a.tg_id}</b>\n"
+        f"👤 <b>{who}</b>\n"
         f"Роль: <b>{a.role}</b>\n"
         f"Добавил: {a.added_by or '—'} ({a.added_at.strftime('%d.%m.%Y')})\n"
         f"Заметка: {html.escape(a.note) if a.note else '—'}\n"
