@@ -10,7 +10,6 @@ from aiogram.enums import ParseMode
 
 from config import settings
 from data.db import close_db, init_db
-from data.seed import seed_shops_if_empty
 from handlers import (
     admin,
     catalog,
@@ -43,7 +42,6 @@ async def main() -> None:
     log = logging.getLogger("bot")
 
     await init_db()
-    await seed_shops_if_empty()
     await warm_texts_cache()
 
     session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else None
