@@ -22,7 +22,6 @@ from data.repos.shops import list_shops_scoped, set_arrival, set_chain_arrival
 from services.audit import write as audit_write
 from services.config_live import get as cfg_get
 from services.megahand_parser import fetch_megahand_arrival
-from services.sheets_parser import import_sheets
 
 log = logging.getLogger(__name__)
 
@@ -44,13 +43,6 @@ REGISTRY: dict[str, ParserDef] = {
         chain_name="Megahand",
         kind="anchor",
         fetch=fetch_megahand_arrival,
-    ),
-    "sheets": ParserDef(
-        key="sheets",
-        label="Google Sheets (импорт магазинов)",
-        chain_name="*",
-        kind="import",
-        import_fn=import_sheets,
     ),
 }
 
