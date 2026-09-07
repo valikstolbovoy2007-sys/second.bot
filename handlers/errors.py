@@ -3,7 +3,7 @@ import logging
 import traceback
 
 from aiogram import Bot, Router
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import CallbackQuery, ErrorEvent
 
 from config import settings
@@ -12,6 +12,22 @@ from services.error_log import write_error
 log = logging.getLogger(__name__)
 router = Router(name="errors")
 unhandled_router = Router(name="unhandled")
+
+# Substrings of TelegramBadRequest messages that are transient noise rather
+# than real bugs — e.g. the callback query itself expired (Telegram gives
+# ~a few dozen seconds to answer it) because a request took unusually long.
+_NOISY_BAD_REQUEST_SNIPPETS = (
+    "query is too old",
+)
+
+
+def _is_noise(exc: Exception) -> bool:
+    if isinstance(exc, (TelegramNetworkError, TelegramRetryAfter)):
+        return True
+    if isinstance(exc, TelegramBadRequest):
+        text = str(exc).lower()
+        return any(s in text for s in _NOISY_BAD_REQUEST_SNIPPETS)
+    return False
 
 
 @unhandled_router.callback_query()
@@ -55,9 +71,10 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
         return
 
     # Transient Telegram-side hiccups (slow/dropped HTTP response, flood
-    # control) aren't actionable — the request usually still went through.
-    # Log them (above) for diagnostics, but don't spam the admin chat.
-    if isinstance(event.exception, (TelegramNetworkError, TelegramRetryAfter)):
+    # control, an expired callback query) aren't actionable — the request
+    # usually still went through. Log them (above) for diagnostics, but
+    # don't spam the admin chat.
+    if _is_noise(event.exception):
         return
 
     if from_user:
