@@ -26,18 +26,21 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
     log.exception("unhandled exception", exc_info=event.exception)
 
     update_dump = event.update.model_dump(exclude_none=True)
-    update_repr = str(update_dump)[:1500]
     tb = "".join(traceback.format_exception(event.exception))
     message = f"{type(event.exception).__name__}: {event.exception}"
 
     source = "unknown"
+    from_user = None
     try:
         if event.update.message:
             source = "message"
+            from_user = event.update.message.from_user
         elif event.update.callback_query:
             source = "callback_query"
+            from_user = event.update.callback_query.from_user
         elif event.update.my_chat_member:
             source = "my_chat_member"
+            from_user = event.update.my_chat_member.from_user
     except Exception:
         pass
 
@@ -57,11 +60,21 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
     if isinstance(event.exception, (TelegramNetworkError, TelegramRetryAfter)):
         return
 
-    tb_short = tb[-1500:]
+    if from_user:
+        who = f"@{from_user.username}" if from_user.username else str(from_user.id)
+    else:
+        who = "—"
+
+    # Last few lines of the traceback — where the actual error is described —
+    # rather than the full stack, which is mostly library internals.
+    tb_lines = [ln for ln in tb.splitlines() if ln.strip()]
+    tb_tail = "\n".join(tb_lines[-8:])
+
     text = (
-        "🐞 <b>Unhandled exception</b>\n\n"
-        f"<b>Update:</b>\n<code>{html.escape(update_repr)}</code>\n\n"
-        f"<b>Traceback:</b>\n<pre>{html.escape(tb_short)}</pre>"
+        "🐞 <b>Ошибка</b>\n\n"
+        f"👤 {html.escape(who)}\n"
+        f"❗ <code>{html.escape(message)}</code>\n\n"
+        f"<pre>{html.escape(tb_tail)}</pre>"
     )
     try:
         await bot.send_message(settings.ADMIN_CHAT_ID, text)
