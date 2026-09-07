@@ -3,6 +3,7 @@ import logging
 import traceback
 
 from aiogram import Bot, Router
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import CallbackQuery, ErrorEvent
 
 from config import settings
@@ -48,6 +49,12 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
     )
 
     if not settings.ADMIN_CHAT_ID:
+        return
+
+    # Transient Telegram-side hiccups (slow/dropped HTTP response, flood
+    # control) aren't actionable — the request usually still went through.
+    # Log them (above) for diagnostics, but don't spam the admin chat.
+    if isinstance(event.exception, (TelegramNetworkError, TelegramRetryAfter)):
         return
 
     tb_short = tb[-1500:]
