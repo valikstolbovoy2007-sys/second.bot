@@ -27,7 +27,7 @@ from data.repos.shops import (
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
-from services.cycle import EventType, next_event_date, resolve_cycle_info
+from services.cycle import EventType, OCCURRENCE_LAST, next_event_date, resolve_cycle_info
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_shops")
@@ -60,10 +60,21 @@ class ShopCb(CallbackData, prefix="admshops"):
 
 
 class AnchorWdCb(CallbackData, prefix="admanchwd"):
+    """Step 1 — pick the weekday; step 2 (AnchorOccCb) picks which occurrence."""
     shop_id: int
     page: int = 0
     wd: int = 0  # 0=Пн ... 6=Вс
-    last: bool = False  # False=первый день недели месяца, True=последний
+
+
+class AnchorOccCb(CallbackData, prefix="admanchocc"):
+    shop_id: int
+    page: int = 0
+    wd: int = 0
+    occurrence: int = 1  # 1..5 = n-я неделя месяца, OCCURRENCE_LAST = последняя
+
+
+_OCCURRENCE_LABELS = [(1, "1-я"), (2, "2-я"), (3, "3-я"), (4, "4-я"), (5, "5-я"),
+                      (OCCURRENCE_LAST, "Последняя")]
 
 
 _WEEKDAY_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -192,8 +203,8 @@ def _card_kb(shop_id: int, page: int, is_active: bool, is_super: bool) -> Inline
 def _format_card(shop, subs: int) -> str:
     chain = f"[{shop.chain_name}] " if shop.chain_name else ""
     if shop.monthly_weekday is not None:
-        position = "последний" if shop.monthly_last else "первый"
-        cycle_anchor = f"{position} {_WEEKDAY_RU[shop.monthly_weekday]} месяца"
+        occ_label = dict(_OCCURRENCE_LABELS).get(shop.monthly_occurrence, "1-я")
+        cycle_anchor = f"{occ_label} {_WEEKDAY_RU[shop.monthly_weekday]} месяца"
     else:
         cycle = f"{shop.cycle_length} дней" if shop.cycle_length else "—"
         anchor = shop.anchor_date.strftime("%d.%m.%Y") if shop.anchor_date else "—"
@@ -257,34 +268,60 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
     )
     rows = []
     if callback_data.field == "anchor":
-        for i, wd in enumerate(_WEEKDAY_RU):
-            rows.append([
+        for i in range(0, 7, 2):
+            row = [
                 InlineKeyboardButton(
-                    text=f"{wd} — первый",
+                    text=wd,
                     callback_data=AnchorWdCb(
-                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i, last=False,
+                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i + j,
                     ).pack(),
-                ),
-                InlineKeyboardButton(
-                    text=f"{wd} — последний",
-                    callback_data=AnchorWdCb(
-                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i, last=True,
-                    ).pack(),
-                ),
-            ])
+                )
+                for j, wd in enumerate(_WEEKDAY_RU[i:i + 2])
+            ]
+            rows.append(row)
     rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
         callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
     )])
     prompt = f"Введи новое значение поля «{label}»:"
     if callback_data.field == "anchor":
-        prompt += "\nИли выбери первый/последний день недели месяца:"
+        prompt += "\nИли выбери день недели месяца (дальше уточнишь, какая по счёту неделя):"
     await call.message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await call.answer()
 
 
 @router.callback_query(AnchorWdCb.filter())
-async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, state: FSMContext) -> None:
+async def cb_anchor_pick_weekday(call: CallbackQuery, callback_data: AnchorWdCb) -> None:
+    if not await can_access_shop(call.from_user.id, callback_data.shop_id):
+        await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    rows = [
+        [InlineKeyboardButton(
+            text=label,
+            callback_data=AnchorOccCb(
+                shop_id=callback_data.shop_id, page=callback_data.page,
+                wd=callback_data.wd, occurrence=occ,
+            ).pack(),
+        )]
+        for occ, label in _OCCURRENCE_LABELS
+    ]
+    rows.append([InlineKeyboardButton(
+        text="✖️ Отмена",
+        callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+    )])
+    await call.message.answer(
+        f"Какая по счёту {_WEEKDAY_RU[callback_data.wd]} месяца?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await call.answer()
+
+
+_OCCURRENCE_RU = {1: "1-ю", 2: "2-ю", 3: "3-ю", 4: "4-ю", 5: "5-ю", OCCURRENCE_LAST: "последнюю"}
+
+
+@router.callback_query(AnchorOccCb.filter())
+async def cb_anchor_pick_occurrence(call: CallbackQuery, callback_data: AnchorOccCb, state: FSMContext) -> None:
     if not await can_access_shop(call.from_user.id, callback_data.shop_id):
         await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
         await call.answer("Нет доступа", show_alert=True)
@@ -296,7 +333,7 @@ async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, stat
     # just be stale leftovers.
     ok = await update_shop_field(callback_data.shop_id, "monthly_weekday", callback_data.wd)
     if ok:
-        await update_shop_field(callback_data.shop_id, "monthly_last", callback_data.last)
+        await update_shop_field(callback_data.shop_id, "monthly_occurrence", callback_data.occurrence)
         await update_shop_field(callback_data.shop_id, "cycle_length", None)
         await update_shop_field(callback_data.shop_id, "anchor_date", None)
     if not ok:
@@ -308,16 +345,18 @@ async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, stat
             "field": "monthly_weekday",
             "before": getattr(shop_before, "monthly_weekday", None),
             "after": callback_data.wd,
-            "last": callback_data.last,
+            "occurrence": callback_data.occurrence,
         },
     )
     await state.clear()
     today = date.today()
-    info = resolve_cycle_info(None, None, callback_data.wd, today, monthly_last=callback_data.last)
+    info = resolve_cycle_info(
+        None, None, callback_data.wd, today, monthly_occurrence=callback_data.occurrence,
+    )
     upcoming = next_event_date(today, info, EventType.ARRIVAL)
-    position = "последний" if callback_data.last else "первый"
     await call.message.answer(
-        f"✅ Anchor изменён: завоз в {position} {_WEEKDAY_RU[callback_data.wd]} каждого месяца "
+        f"✅ Anchor изменён: завоз в {_OCCURRENCE_RU[callback_data.occurrence]} "
+        f"{_WEEKDAY_RU[callback_data.wd]} каждого месяца "
         f"(ближайший — {upcoming.strftime('%d.%m.%Y')})"
     )
     shop = await get_shop(callback_data.shop_id)

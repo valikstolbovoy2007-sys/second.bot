@@ -231,8 +231,11 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS maps_url TEXT;
 -- см. services.cycle.resolve_cycle_info — сохранённые cycle_length/
 -- anchor_date для них игнорируются.
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_weekday SMALLINT;
--- true = «последний» день недели месяца вместо «первого» (см. выше).
-ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_last BOOLEAN NOT NULL DEFAULT false;
+-- Какое по счёту вхождение дня недели в месяце: 1..5 (1-я..5-я неделя)
+-- или -1 (services.cycle.OCCURRENCE_LAST) для «последней». Значимо только
+-- когда monthly_weekday не NULL — см. services.cycle.resolve_cycle_info.
+ALTER TABLE shops           DROP COLUMN IF EXISTS monthly_last;
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_occurrence SMALLINT NOT NULL DEFAULT 1;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и
 -- удаляем колонку. Обе операции идемпотентны — повторный запуск ничего

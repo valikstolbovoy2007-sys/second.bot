@@ -28,7 +28,7 @@ def _shop(
     price_start: int | None = 1200,
     price_step: int | None = 50,
     monthly_weekday: int | None = None,
-    monthly_last: bool = False,
+    monthly_occurrence: int = 1,
 ) -> Shop:
     return Shop(
         id=id, name=name, address=address, description=None,
@@ -39,7 +39,7 @@ def _shop(
         is_active=True,
         maps_url=None,
         monthly_weekday=monthly_weekday,
-        monthly_last=monthly_last,
+        monthly_occurrence=monthly_occurrence,
     )
 
 

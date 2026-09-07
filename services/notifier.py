@@ -51,7 +51,7 @@ def pick_events_for_subscription(sub: dict, today: date, weekdays: set[int]) -> 
     events: list[str] = []
     info = resolve_cycle_info(
         sub["cycle_length"], sub["anchor_date"], sub.get("monthly_weekday"), today,
-        monthly_last=bool(sub.get("monthly_last")),
+        monthly_occurrence=int(sub.get("monthly_occurrence") or 1),
     )
     if info is not None:
         for ev in events_on(today, info):
