@@ -1,6 +1,6 @@
 import html
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters.callback_data import CallbackData
@@ -56,6 +56,22 @@ class ShopCb(CallbackData, prefix="admshops"):
     page: int = 0
     shop_id: int = 0
     field: str | None = None
+
+
+class AnchorWdCb(CallbackData, prefix="admanchwd"):
+    shop_id: int
+    page: int = 0
+    wd: int = 0  # 0=Пн ... 6=Вс
+
+
+_WEEKDAY_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def _first_weekday_of_month(today: date, weekday: int) -> date:
+    """First occurrence of `weekday` (0=Пн..6=Вс) in `today`'s calendar month."""
+    first = today.replace(day=1)
+    offset = (weekday - first.weekday()) % 7
+    return first + timedelta(days=offset)
 
 
 class EditStates(StatesGroup):
@@ -239,11 +255,60 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
     await state.update_data(
         shop_id=callback_data.shop_id, field=callback_data.field, page=callback_data.page
     )
-    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+    rows = []
+    if callback_data.field == "anchor":
+        rows.append([
+            InlineKeyboardButton(
+                text=wd,
+                callback_data=AnchorWdCb(
+                    shop_id=callback_data.shop_id, page=callback_data.page, wd=i,
+                ).pack(),
+            )
+            for i, wd in enumerate(_WEEKDAY_RU)
+        ])
+    rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
         callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
-    )]])
-    await call.message.answer(f"Введи новое значение поля «{label}»:", reply_markup=cancel_kb)
+    )])
+    prompt = f"Введи новое значение поля «{label}»:"
+    if callback_data.field == "anchor":
+        prompt += "\nИли выбери первый день недели этого месяца:"
+    await call.message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await call.answer()
+
+
+@router.callback_query(AnchorWdCb.filter())
+async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, state: FSMContext) -> None:
+    if not await can_access_shop(call.from_user.id, callback_data.shop_id):
+        await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    anchor = _first_weekday_of_month(date.today(), callback_data.wd)
+    shop_before = await get_shop(callback_data.shop_id)
+    ok = await update_shop_field(callback_data.shop_id, "anchor_date", anchor)
+    if not ok:
+        await call.answer("Не удалось обновить", show_alert=True)
+        return
+    await audit_write(
+        call.from_user.id, "shop.update", "shop", callback_data.shop_id,
+        {
+            "field": "anchor_date",
+            "before": getattr(shop_before, "anchor_date", None),
+            "after": anchor.isoformat(),
+        },
+    )
+    await state.clear()
+    await call.message.answer(
+        f"✅ Anchor изменён: {anchor.strftime('%d.%m.%Y')} "
+        f"(первый {_WEEKDAY_RU[callback_data.wd]} месяца)"
+    )
+    shop = await get_shop(callback_data.shop_id)
+    subs = await shop_subscribers_count(callback_data.shop_id)
+    is_super = await is_super_admin(call.from_user.id)
+    await call.message.answer(
+        _format_card(shop, subs),
+        reply_markup=_card_kb(callback_data.shop_id, callback_data.page, shop.is_active, is_super),
+    )
     await call.answer()
 
 
