@@ -27,6 +27,17 @@ async def upsert_user(tg_id: int, username: str | None) -> int:
     return row["id"]
 
 
+async def get_tg_id_by_username(username: str) -> int | None:
+    """Only finds users who have interacted with the bot at least once —
+    Telegram doesn't expose a username -> id lookup, so this relies on the
+    `users.username` snapshot taken on their last /start or message."""
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT tg_id FROM users WHERE username ILIKE $1", username,
+        )
+    return int(row["tg_id"]) if row else None
+
+
 async def is_admin(tg_id: int) -> bool:
     from data.repos.admin_roles import is_admin as _is_admin
     return await _is_admin(tg_id)

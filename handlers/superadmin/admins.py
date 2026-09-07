@@ -25,6 +25,7 @@ from data.repos.admin_roles import (
     unassign_shop,
 )
 from data.repos.shops import get_shop, list_all_shops
+from data.repos.users import get_tg_id_by_username
 from handlers.admin.filters import IsSuperAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
@@ -74,7 +75,9 @@ async def cb_list(call: CallbackQuery, callback_data: AdmCb | None = None) -> No
 async def cb_add_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdmStates.add_id)
     await call.message.answer(
-        "Введи tg_id нового админа (числом). Это ID Telegram-пользователя.\nОтмена: /cancel",
+        "Введи @username нового админа. Работает только если он уже хотя бы "
+        "раз писал этому боту (например, /start) — иначе бот не знает его ID.\n"
+        "Отмена: /cancel",
     )
     await call.answer()
 
@@ -88,10 +91,17 @@ async def msg_add_cancel(message: Message, state: FSMContext) -> None:
 @router.message(AdmStates.add_id, F.text)
 async def msg_add_id(message: Message, state: FSMContext) -> None:
     raw = message.text.strip().lstrip("@")
-    if not raw.lstrip("-").isdigit():
-        await message.answer("Это не tg_id. Введи число.")
-        return
-    tg_id = int(raw)
+    if raw.lstrip("-").isdigit():
+        # Numeric input still works as a direct tg_id (e.g. from a support chat).
+        tg_id = int(raw)
+    else:
+        tg_id = await get_tg_id_by_username(raw)
+        if tg_id is None:
+            await message.answer(
+                f"Не нашёл @{raw} — он ещё ни разу не писал этому боту. "
+                "Попроси его отправить /start и повтори."
+            )
+            return
     await add_admin(tg_id, "admin", message.from_user.id)
     await audit_write(message.from_user.id, "admin.add", "admin", tg_id, {"role": "admin"})
     await state.clear()
@@ -99,8 +109,9 @@ async def msg_add_id(message: Message, state: FSMContext) -> None:
         text="📌 Назначить магазины",
         callback_data=AdmCb(action="assign", tg_id=tg_id).pack(),
     )]]
+    who = f"@{html.escape(raw)} ({tg_id})" if not raw.lstrip("-").isdigit() else str(tg_id)
     await message.answer(
-        f"✅ Админ {tg_id} добавлен с ролью <b>admin</b>.\n"
+        f"✅ Админ {who} добавлен с ролью <b>admin</b>.\n"
         f"Теперь назначь ему магазины — иначе он не увидит ничего.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
