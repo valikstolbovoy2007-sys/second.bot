@@ -20,6 +20,7 @@ class Shop:
     is_active: bool
     maps_url: str | None
     monthly_weekday: int | None
+    monthly_last: bool
 
 
 def _row_to_shop(row) -> Shop:
@@ -37,6 +38,7 @@ def _row_to_shop(row) -> Shop:
         is_active=row["is_active"],
         maps_url=row["maps_url"],
         monthly_weekday=row["monthly_weekday"],
+        monthly_last=row["monthly_last"],
     )
 
 
@@ -205,7 +207,7 @@ async def update_shop_field(shop_id: int, field: str, value) -> bool:
     allowed = {"name", "address", "description", "chain_name",
                "cycle_length", "anchor_date", "is_active",
                "price_start", "price_step", "working_hours", "maps_url",
-               "monthly_weekday"}
+               "monthly_weekday", "monthly_last"}
     if field not in allowed:
         raise ValueError(f"field {field} not editable")
     async with pool().acquire() as conn:

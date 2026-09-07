@@ -50,7 +50,7 @@ _SEP = "━━━━━━━━━━━━━━━━"
 
 
 def today_marker(shop: Shop, today: date) -> str:
-    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_last=shop.monthly_last)
     if info is None:
         return ""
     events = events_on(today, info)
@@ -64,7 +64,7 @@ def phase_marker(shop: Shop, today: date) -> str:
 
     Empty if the shop has no cycle configured.
     """
-    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_last=shop.monthly_last)
     if info is None:
         return ""
     d = day_in_cycle(today, info)
@@ -131,7 +131,7 @@ def format_price_schedule(shop: Shop, today: date) -> str:
             "💭 Цены пока не уточнили — но магазин работает.\n"
             "Загляни в карточку, чтобы посмотреть адрес и расписание завозов."
         )
-    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_last=shop.monthly_last)
     if info is None:
         return (
             f"{header}\n\n"

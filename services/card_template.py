@@ -136,7 +136,7 @@ def build_context(shop: Shop, today: date, *, is_tracked: bool = False) -> dict[
         "sep2": _SEP2,
     }
 
-    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_last=shop.monthly_last)
     if info is not None:
         d = day_in_cycle(today, info)
         ctx["day_in_cycle"] = str(d + 1)
@@ -276,6 +276,7 @@ def validate(template: str) -> tuple[bool, str]:
         is_active=True,
         maps_url=None,
         monthly_weekday=None,
+        monthly_last=False,
     )
     try:
         ctx = build_context(sample, date.today(), is_tracked=False)

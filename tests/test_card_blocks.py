@@ -41,6 +41,7 @@ def _sample_shop() -> Shop:
         is_active=True,
         maps_url=None,
         monthly_weekday=None,
+        monthly_last=False,
     )
 
 

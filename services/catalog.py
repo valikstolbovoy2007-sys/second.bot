@@ -60,7 +60,7 @@ class ShopFacts:
 
 
 def compute_facts(shop: Shop, today: date) -> ShopFacts:
-    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_last=shop.monthly_last)
     if info is None:
         return ShopFacts(shop, None, frozenset(), None, None)
     d = day_in_cycle(today, info)

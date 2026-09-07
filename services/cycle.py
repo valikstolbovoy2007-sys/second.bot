@@ -74,25 +74,34 @@ def first_weekday_of_month(anchor_month: date, weekday: int) -> date:
     return first + timedelta(days=offset)
 
 
-def monthly_weekday_cycle(today: date, weekday: int) -> CycleInfo:
+def last_weekday_of_month(anchor_month: date, weekday: int) -> date:
+    """Last occurrence of `weekday` (0=Пн..6=Вс) in `anchor_month`'s month."""
+    next_month_start = (anchor_month.replace(day=1) + timedelta(days=32)).replace(day=1)
+    last_day = next_month_start - timedelta(days=1)
+    offset = (last_day.weekday() - weekday) % 7
+    return last_day - timedelta(days=offset)
+
+
+def monthly_weekday_cycle(today: date, weekday: int, *, last: bool = False) -> CycleInfo:
     """Recomputes (anchor, cycle_length) fresh from `today` every call.
 
-    Shops that deliver on "the first Thursday of the month" don't fit a
-    fixed-length cycle — months vary 28-31 days. Rather than storing a
+    Shops that deliver on "the first/last Thursday of the month" don't fit
+    a fixed-length cycle — months vary 28-31 days. Rather than storing a
     static cycle_length that drifts out of sync, we derive it live: anchor
     is the most recent real occurrence of `weekday` on-or-before `today`,
     and cycle_length is the exact number of days to the *next* real
     occurrence. Since this is recomputed from `date.today()` on every
     call, it never goes stale — no background job needed to "advance" it.
     """
-    this_month = first_weekday_of_month(today, weekday)
+    occurrence = last_weekday_of_month if last else first_weekday_of_month
+    this_month = occurrence(today, weekday)
     if this_month <= today:
         anchor = this_month
     else:
         prev_month_end = today.replace(day=1) - timedelta(days=1)
-        anchor = first_weekday_of_month(prev_month_end, weekday)
+        anchor = occurrence(prev_month_end, weekday)
     next_month_start = (anchor.replace(day=1) + timedelta(days=32)).replace(day=1)
-    next_occurrence = first_weekday_of_month(next_month_start, weekday)
+    next_occurrence = occurrence(next_month_start, weekday)
     return CycleInfo(cycle_length=(next_occurrence - anchor).days, anchor_date=anchor)
 
 
@@ -101,14 +110,17 @@ def resolve_cycle_info(
     anchor_date: date | None,
     monthly_weekday: int | None,
     today: date,
+    *,
+    monthly_last: bool = False,
 ) -> CycleInfo | None:
     """Single place that decides which recurrence model a shop uses.
 
-    `monthly_weekday` (set via the admin's "first weekday of month" picker)
-    always wins over a manually-set fixed cycle — see monthly_weekday_cycle.
+    `monthly_weekday` (set via the admin's "first/last weekday of month"
+    picker) always wins over a manually-set fixed cycle — see
+    monthly_weekday_cycle. `monthly_last` picks last-of-month vs first.
     """
     if monthly_weekday is not None:
-        return monthly_weekday_cycle(today, monthly_weekday)
+        return monthly_weekday_cycle(today, monthly_weekday, last=monthly_last)
     if cycle_length and anchor_date:
         return CycleInfo(cycle_length, anchor_date)
     return None

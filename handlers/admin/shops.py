@@ -63,6 +63,7 @@ class AnchorWdCb(CallbackData, prefix="admanchwd"):
     shop_id: int
     page: int = 0
     wd: int = 0  # 0=Пн ... 6=Вс
+    last: bool = False  # False=первый день недели месяца, True=последний
 
 
 _WEEKDAY_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -191,7 +192,8 @@ def _card_kb(shop_id: int, page: int, is_active: bool, is_super: bool) -> Inline
 def _format_card(shop, subs: int) -> str:
     chain = f"[{shop.chain_name}] " if shop.chain_name else ""
     if shop.monthly_weekday is not None:
-        cycle_anchor = f"первый {_WEEKDAY_RU[shop.monthly_weekday]} месяца"
+        position = "последний" if shop.monthly_last else "первый"
+        cycle_anchor = f"{position} {_WEEKDAY_RU[shop.monthly_weekday]} месяца"
     else:
         cycle = f"{shop.cycle_length} дней" if shop.cycle_length else "—"
         anchor = shop.anchor_date.strftime("%d.%m.%Y") if shop.anchor_date else "—"
@@ -255,22 +257,28 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
     )
     rows = []
     if callback_data.field == "anchor":
-        rows.append([
-            InlineKeyboardButton(
-                text=wd,
-                callback_data=AnchorWdCb(
-                    shop_id=callback_data.shop_id, page=callback_data.page, wd=i,
-                ).pack(),
-            )
-            for i, wd in enumerate(_WEEKDAY_RU)
-        ])
+        for i, wd in enumerate(_WEEKDAY_RU):
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"{wd} — первый",
+                    callback_data=AnchorWdCb(
+                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i, last=False,
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=f"{wd} — последний",
+                    callback_data=AnchorWdCb(
+                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i, last=True,
+                    ).pack(),
+                ),
+            ])
     rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
         callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
     )])
     prompt = f"Введи новое значение поля «{label}»:"
     if callback_data.field == "anchor":
-        prompt += "\nИли выбери первый день недели этого месяца:"
+        prompt += "\nИли выбери первый/последний день недели месяца:"
     await call.message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await call.answer()
 
@@ -288,6 +296,7 @@ async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, stat
     # just be stale leftovers.
     ok = await update_shop_field(callback_data.shop_id, "monthly_weekday", callback_data.wd)
     if ok:
+        await update_shop_field(callback_data.shop_id, "monthly_last", callback_data.last)
         await update_shop_field(callback_data.shop_id, "cycle_length", None)
         await update_shop_field(callback_data.shop_id, "anchor_date", None)
     if not ok:
@@ -299,14 +308,16 @@ async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, stat
             "field": "monthly_weekday",
             "before": getattr(shop_before, "monthly_weekday", None),
             "after": callback_data.wd,
+            "last": callback_data.last,
         },
     )
     await state.clear()
     today = date.today()
-    info = resolve_cycle_info(None, None, callback_data.wd, today)
+    info = resolve_cycle_info(None, None, callback_data.wd, today, monthly_last=callback_data.last)
     upcoming = next_event_date(today, info, EventType.ARRIVAL)
+    position = "последний" if callback_data.last else "первый"
     await call.message.answer(
-        f"✅ Anchor изменён: завоз в первый {_WEEKDAY_RU[callback_data.wd]} каждого месяца "
+        f"✅ Anchor изменён: завоз в {position} {_WEEKDAY_RU[callback_data.wd]} каждого месяца "
         f"(ближайший — {upcoming.strftime('%d.%m.%Y')})"
     )
     shop = await get_shop(callback_data.shop_id)
