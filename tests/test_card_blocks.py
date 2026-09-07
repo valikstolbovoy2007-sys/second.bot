@@ -40,6 +40,7 @@ def _sample_shop() -> Shop:
         working_hours="Пн-Сб 10:00–21:00",
         is_active=True,
         maps_url=None,
+        monthly_weekday=None,
     )
 
 

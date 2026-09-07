@@ -27,6 +27,7 @@ def _shop(
     anchor_date: date | None = None,
     price_start: int | None = 1200,
     price_step: int | None = 50,
+    monthly_weekday: int | None = None,
 ) -> Shop:
     return Shop(
         id=id, name=name, address=address, description=None,
@@ -36,6 +37,7 @@ def _shop(
         working_hours=None,
         is_active=True,
         maps_url=None,
+        monthly_weekday=monthly_weekday,
     )
 
 

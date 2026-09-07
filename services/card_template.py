@@ -20,13 +20,13 @@ from typing import Any
 
 from data.repos.shops import Shop
 from services.cycle import (
-    CycleInfo,
     EventType,
     day_in_cycle,
     days_until,
     events_on,
     humanize_days,
     next_event_date,
+    resolve_cycle_info,
 )
 
 CONFIG_KEY = "shop_card_template"
@@ -136,14 +136,14 @@ def build_context(shop: Shop, today: date, *, is_tracked: bool = False) -> dict[
         "sep2": _SEP2,
     }
 
-    if shop.cycle_length and shop.anchor_date:
-        info = CycleInfo(shop.cycle_length, shop.anchor_date)
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    if info is not None:
         d = day_in_cycle(today, info)
         ctx["day_in_cycle"] = str(d + 1)
 
         if shop.price_start and shop.price_step is not None:
             price = max(0, shop.price_start - max(0, d) * shop.price_step)
-            emoji = price_phase_emoji(d, shop.cycle_length)
+            emoji = price_phase_emoji(d, info.cycle_length)
             ctx["price_today"] = _fmt_price(price)
             ctx["price_emoji"] = emoji
             if d == 0:
@@ -275,6 +275,7 @@ def validate(template: str) -> tuple[bool, str]:
         working_hours="Пн-Сб 10:00–21:00, Вс выходной",
         is_active=True,
         maps_url=None,
+        monthly_weekday=None,
     )
     try:
         ctx = build_context(sample, date.today(), is_tracked=False)

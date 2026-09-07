@@ -14,7 +14,7 @@ from data.repos.notifier_repo import (
     mark_sent,
     users_due_at,
 )
-from services.cycle import CycleInfo, EventType, events_on
+from services.cycle import EventType, events_on, resolve_cycle_info
 
 log = logging.getLogger(__name__)
 
@@ -49,8 +49,10 @@ class Trigger:
 
 def pick_events_for_subscription(sub: dict, today: date, weekdays: set[int]) -> list[str]:
     events: list[str] = []
-    if sub["cycle_length"] and sub["anchor_date"]:
-        info = CycleInfo(sub["cycle_length"], sub["anchor_date"])
+    info = resolve_cycle_info(
+        sub["cycle_length"], sub["anchor_date"], sub.get("monthly_weekday"), today,
+    )
+    if info is not None:
         for ev in events_on(today, info):
             if sub.get(_EVENT_FIELD[ev]):
                 events.append(_EVENT_NAME[ev])

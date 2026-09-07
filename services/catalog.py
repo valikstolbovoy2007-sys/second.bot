@@ -13,11 +13,11 @@ from datetime import date
 
 from data.repos.shops import Shop
 from services.cycle import (
-    CycleInfo,
     EventType,
     day_in_cycle,
     days_until,
     events_on,
+    resolve_cycle_info,
 )
 
 # ---------- filter / sort codes ----------
@@ -60,9 +60,9 @@ class ShopFacts:
 
 
 def compute_facts(shop: Shop, today: date) -> ShopFacts:
-    if not (shop.cycle_length and shop.anchor_date):
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    if info is None:
         return ShopFacts(shop, None, frozenset(), None, None)
-    info = CycleInfo(shop.cycle_length, shop.anchor_date)
     d = day_in_cycle(today, info)
     events = frozenset(events_on(today, info))
     price: int | None = None

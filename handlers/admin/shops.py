@@ -1,6 +1,6 @@
 import html
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from aiogram import F, Router
 from aiogram.filters.callback_data import CallbackData
@@ -27,6 +27,7 @@ from data.repos.shops import (
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
+from services.cycle import EventType, next_event_date, resolve_cycle_info
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_shops")
@@ -65,13 +66,6 @@ class AnchorWdCb(CallbackData, prefix="admanchwd"):
 
 
 _WEEKDAY_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-
-
-def _first_weekday_of_month(today: date, weekday: int) -> date:
-    """First occurrence of `weekday` (0=Пн..6=Вс) in `today`'s calendar month."""
-    first = today.replace(day=1)
-    offset = (weekday - first.weekday()) % 7
-    return first + timedelta(days=offset)
 
 
 class EditStates(StatesGroup):
@@ -196,8 +190,12 @@ def _card_kb(shop_id: int, page: int, is_active: bool, is_super: bool) -> Inline
 
 def _format_card(shop, subs: int) -> str:
     chain = f"[{shop.chain_name}] " if shop.chain_name else ""
-    cycle = f"{shop.cycle_length} дней" if shop.cycle_length else "—"
-    anchor = shop.anchor_date.strftime("%d.%m.%Y") if shop.anchor_date else "—"
+    if shop.monthly_weekday is not None:
+        cycle_anchor = f"первый {_WEEKDAY_RU[shop.monthly_weekday]} месяца"
+    else:
+        cycle = f"{shop.cycle_length} дней" if shop.cycle_length else "—"
+        anchor = shop.anchor_date.strftime("%d.%m.%Y") if shop.anchor_date else "—"
+        cycle_anchor = f"{cycle} | Anchor: {anchor}"
     flag = "✅ активен" if shop.is_active else "🚫 неактивен"
     desc = html.escape(shop.description) if shop.description else "—"
     hours = html.escape(shop.working_hours) if shop.working_hours else "—"
@@ -211,7 +209,7 @@ def _format_card(shop, subs: int) -> str:
         f"{flag}\n"
         f"📍 {html.escape(shop.address)}\n"
         f"🕒 Время работы: {hours}\n"
-        f"🗓 Цикл: {cycle} | Anchor: {anchor}\n"
+        f"🗓 Цикл: {cycle_anchor}\n"
         f"{price_line}\n"
         f"👀 Подписчиков: {subs}\n"
         f"─────────────────────\n"
@@ -283,24 +281,33 @@ async def cb_anchor_weekday(call: CallbackQuery, callback_data: AnchorWdCb, stat
         await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
         await call.answer("Нет доступа", show_alert=True)
         return
-    anchor = _first_weekday_of_month(date.today(), callback_data.wd)
     shop_before = await get_shop(callback_data.shop_id)
-    ok = await update_shop_field(callback_data.shop_id, "anchor_date", anchor)
+    # monthly_weekday takes over from the fixed cycle entirely — the actual
+    # anchor/cycle_length get recomputed live from today() on every render
+    # (see services.cycle.resolve_cycle_info), so the stored ones would
+    # just be stale leftovers.
+    ok = await update_shop_field(callback_data.shop_id, "monthly_weekday", callback_data.wd)
+    if ok:
+        await update_shop_field(callback_data.shop_id, "cycle_length", None)
+        await update_shop_field(callback_data.shop_id, "anchor_date", None)
     if not ok:
         await call.answer("Не удалось обновить", show_alert=True)
         return
     await audit_write(
         call.from_user.id, "shop.update", "shop", callback_data.shop_id,
         {
-            "field": "anchor_date",
-            "before": getattr(shop_before, "anchor_date", None),
-            "after": anchor.isoformat(),
+            "field": "monthly_weekday",
+            "before": getattr(shop_before, "monthly_weekday", None),
+            "after": callback_data.wd,
         },
     )
     await state.clear()
+    today = date.today()
+    info = resolve_cycle_info(None, None, callback_data.wd, today)
+    upcoming = next_event_date(today, info, EventType.ARRIVAL)
     await call.message.answer(
-        f"✅ Anchor изменён: {anchor.strftime('%d.%m.%Y')} "
-        f"(первый {_WEEKDAY_RU[callback_data.wd]} месяца)"
+        f"✅ Anchor изменён: завоз в первый {_WEEKDAY_RU[callback_data.wd]} каждого месяца "
+        f"(ближайший — {upcoming.strftime('%d.%m.%Y')})"
     )
     shop = await get_shop(callback_data.shop_id)
     subs = await shop_subscribers_count(callback_data.shop_id)
@@ -369,6 +376,10 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         await message.answer("Не удалось обновить.")
         await state.clear()
         return
+    if field in ("cycle", "anchor") and shop_before and shop_before.monthly_weekday is not None:
+        # Manually typing a cycle length/date means "go back to fixed mode" —
+        # otherwise monthly_weekday would keep overriding what was just set.
+        await update_shop_field(shop_id, "monthly_weekday", None)
     await audit_write(
         message.from_user.id, "shop.update", "shop", shop_id,
         {"field": db_field, "before": getattr(shop_before, db_field, None), "after": str(value)},

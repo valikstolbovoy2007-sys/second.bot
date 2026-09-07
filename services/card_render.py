@@ -26,11 +26,11 @@ from services.card_template import (
 )
 from services.config_live import get as cfg_get
 from services.cycle import (
-    CycleInfo,
     EventType,
     day_in_cycle,
     events_on,
     next_event_date,
+    resolve_cycle_info,
 )
 
 log = logging.getLogger(__name__)
@@ -50,9 +50,10 @@ _SEP = "━━━━━━━━━━━━━━━━"
 
 
 def today_marker(shop: Shop, today: date) -> str:
-    if shop.cycle_length is None or shop.anchor_date is None:
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    if info is None:
         return ""
-    events = events_on(today, CycleInfo(shop.cycle_length, shop.anchor_date))
+    events = events_on(today, info)
     if not events:
         return ""
     return EVENT_EMOJI[next(iter(events))]
@@ -63,10 +64,11 @@ def phase_marker(shop: Shop, today: date) -> str:
 
     Empty if the shop has no cycle configured.
     """
-    if shop.cycle_length is None or shop.anchor_date is None:
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    if info is None:
         return ""
-    d = day_in_cycle(today, CycleInfo(shop.cycle_length, shop.anchor_date))
-    return price_phase_emoji(d, shop.cycle_length)
+    d = day_in_cycle(today, info)
+    return price_phase_emoji(d, info.cycle_length)
 
 
 async def _load_template() -> str:
@@ -129,29 +131,29 @@ def format_price_schedule(shop: Shop, today: date) -> str:
             "💭 Цены пока не уточнили — но магазин работает.\n"
             "Загляни в карточку, чтобы посмотреть адрес и расписание завозов."
         )
-    if shop.cycle_length is None or shop.anchor_date is None:
+    info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today)
+    if info is None:
         return (
             f"{header}\n\n"
             "📅 Расписание завозов уточняется.\n"
             "Как только появится — всё подтянется автоматически."
         )
 
-    info = CycleInfo(shop.cycle_length, shop.anchor_date)
     today_day = day_in_cycle(today, info)
     days_to_next = days_until(today, info, EventType.ARRIVAL)
-    show_days = shop.cycle_length if days_to_next == 0 else days_to_next
+    show_days = info.cycle_length if days_to_next == 0 else days_to_next
 
     lines = [
         "📋 <b>Расписание цен</b>",
         f"🏪 <b>{_html.escape(shop.name)}</b>",
         _SEP,
-        f"🗓 Цикл: {shop.cycle_length} дн. · шаг {_fmt_price(shop.price_step)} ₽/день",
+        f"🗓 Цикл: {info.cycle_length} дн. · шаг {_fmt_price(shop.price_step)} ₽/день",
         _SEP,
     ]
 
     for i in range(show_days + 1):
         d = today + timedelta(days=i)
-        cycle_day = (today_day + i) % shop.cycle_length
+        cycle_day = (today_day + i) % info.cycle_length
         wd = _WEEKDAY_RU[d.weekday()]
         mon = _MONTHS_RU[d.month]
         date_str = f"{wd}, {d.day} {mon}"

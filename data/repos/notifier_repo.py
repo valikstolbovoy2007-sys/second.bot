@@ -27,6 +27,7 @@ async def fetch_user_subscriptions(user_id: int) -> list[dict]:
                    s.address     AS address,
                    s.cycle_length,
                    s.anchor_date,
+                   s.monthly_weekday,
                    sub.notify_arrival,
                    sub.notify_max_discount,
                    sub.notify_middle

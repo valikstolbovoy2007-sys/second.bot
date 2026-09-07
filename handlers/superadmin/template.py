@@ -80,6 +80,8 @@ def _sample_shop() -> Shop:
         price_step=80,
         working_hours="Пн-Сб 10:00–21:00, Вс выходной",
         is_active=True,
+        maps_url=None,
+        monthly_weekday=None,
     )
 
 

@@ -225,6 +225,12 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_start INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_step  INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS working_hours TEXT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS maps_url TEXT;
+-- Магазины с завозом «в первый день недели месяца» (например, первый
+-- четверг): 0=Пн..6=Вс, NULL — обычный режим с фиксированным cycle_length.
+-- Cycle/anchor для таких магазинов пересчитываются на лету от today(),
+-- см. services.cycle.resolve_cycle_info — сохранённые cycle_length/
+-- anchor_date для них игнорируются.
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_weekday SMALLINT;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и
 -- удаляем колонку. Обе операции идемпотентны — повторный запуск ничего
