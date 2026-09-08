@@ -59,7 +59,7 @@ class TrackCb(CallbackData, prefix="trk"):
 
 
 def _shop_button_label(shop: Shop, phase_marker: str = "", tracked: bool = False) -> str:
-    markers = "".join(m for m in (("" if shop.price_start else "📌"), phase_marker) if m)
+    markers = "".join(m for m in (("" if shop.price_start else "🎩"), phase_marker) if m)
     prefix = markers + " " if markers else ""
     star = "💘 " if tracked else ""
     name = shop.name

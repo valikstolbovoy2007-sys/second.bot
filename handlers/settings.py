@@ -6,9 +6,12 @@ from aiogram.types import CallbackQuery
 
 from data.repos.shops import get_shop
 from data.repos.subs import (
+    disable_event_notify,
+    get_event_settings,
     get_flags,
     get_weekdays,
     is_subscribed,
+    set_event_notify,
     toggle_flag,
     toggle_weekday,
 )
@@ -20,10 +23,14 @@ from data.repos.users import (
 )
 from keyboards.catalog_kb import shop_card_kb
 from keyboards.settings_kb import (
+    EVENT_LABELS_RU,
     PauseCb,
     SettingsCb,
     ShopNotifCb,
     TimeCb,
+    event_lead_picker_kb,
+    event_time_picker_kb,
+    lead_days_label,
     pause_picker_kb,
     settings_menu_kb,
     shop_notif_cycle_kb,
@@ -120,6 +127,27 @@ async def cb_pause_pick(call: CallbackQuery, callback_data: PauseCb) -> None:
 
 # --- Per-shop notification settings ---
 
+async def _cycle_notif_view(user_id: int, shop_id: int, src: str, page: int) -> tuple[str, object]:
+    shop = await get_shop(shop_id)
+    assert shop is not None
+    flags = await get_flags(user_id, shop_id)
+    event_settings = await get_event_settings(user_id, shop_id)
+    assert flags is not None and event_settings is not None
+    title = await t("settings.shop_notif_title", shop_name=shop.name)
+    text = f"{title}\n\n{await t('settings.shop_notif_cycle')}"
+    kb = shop_notif_cycle_kb(
+        shop_id,
+        {
+            "notify_arrival": flags.notify_arrival,
+            "notify_max_discount": flags.notify_max_discount,
+            "notify_middle": flags.notify_middle,
+        },
+        event_settings,
+        src=src, page=page,
+    )
+    return text, kb
+
+
 @router.callback_query(ShopNotifCb.filter(F.action == "open"))
 async def cb_shop_notif_open(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
@@ -131,22 +159,11 @@ async def cb_shop_notif_open(call: CallbackQuery, callback_data: ShopNotifCb) ->
         await call.answer(await t("settings.need_track"), show_alert=True)
         return
 
-    title = await t("settings.shop_notif_title", shop_name=shop.name)
-    if shop.cycle_length and shop.anchor_date:
-        flags = await get_flags(user_id, shop.id)
-        assert flags is not None
-        text = f"{title}\n\n{await t('settings.shop_notif_cycle')}"
-        kb = shop_notif_cycle_kb(
-            shop.id,
-            {
-                "notify_arrival": flags.notify_arrival,
-                "notify_max_discount": flags.notify_max_discount,
-                "notify_middle": flags.notify_middle,
-            },
-            src=callback_data.src, page=callback_data.page,
-        )
+    if (shop.cycle_length and shop.anchor_date) or shop.monthly_weekday is not None:
+        text, kb = await _cycle_notif_view(user_id, shop.id, callback_data.src, callback_data.page)
     else:
         days = await get_weekdays(user_id, shop.id)
+        title = await t("settings.shop_notif_title", shop_name=shop.name)
         text = f"{title}\n\n{await t('settings.shop_notif_wdays')}"
         kb = shop_notif_weekdays_kb(shop.id, days, src=callback_data.src, page=callback_data.page)
     await show_text_view(call, text, kb)
@@ -157,21 +174,63 @@ async def cb_shop_notif_open(call: CallbackQuery, callback_data: ShopNotifCb) ->
 async def cb_shop_notif_toggle(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     new_value = await toggle_flag(user_id, callback_data.shop_id, callback_data.value)
-    flags = await get_flags(user_id, callback_data.shop_id)
-    assert flags is not None
-    shop = await get_shop(callback_data.shop_id)
-    assert shop is not None
-    kb = shop_notif_cycle_kb(
-        shop.id,
-        {
-            "notify_arrival": flags.notify_arrival,
-            "notify_max_discount": flags.notify_max_discount,
-            "notify_middle": flags.notify_middle,
-        },
-        src=callback_data.src, page=callback_data.page,
-    )
+    _text, kb = await _cycle_notif_view(user_id, callback_data.shop_id, callback_data.src, callback_data.page)
     await call.message.edit_reply_markup(reply_markup=kb)
     await call.answer(await t("settings.toggle_on" if new_value else "settings.toggle_off"))
+
+
+@router.callback_query(ShopNotifCb.filter(F.action == "evopen"))
+async def cb_event_open(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    event = callback_data.value
+    if event not in EVENT_LABELS_RU:
+        await call.answer("Неизвестное событие", show_alert=True)
+        return
+    await show_text_view(
+        call,
+        f"{EVENT_LABELS_RU[event]}\n\nЗа сколько дней предупреждать?",
+        event_lead_picker_kb(callback_data.shop_id, event, callback_data.src, callback_data.page),
+    )
+    await call.answer()
+
+
+@router.callback_query(ShopNotifCb.filter(F.action == "evlead"))
+async def cb_event_lead(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
+    event, lead_str = callback_data.value.split("|")
+    await show_text_view(
+        call,
+        f"{EVENT_LABELS_RU[event]}, {lead_days_label(int(lead_str)).lower()}\n\nВ какое время присылать?",
+        event_time_picker_kb(callback_data.shop_id, event, int(lead_str), callback_data.src, callback_data.page),
+    )
+    await call.answer()
+
+
+@router.callback_query(ShopNotifCb.filter(F.action == "evtime"))
+async def cb_event_time(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    event, lead_str, time_str = callback_data.value.split("|")
+    lead = int(lead_str)
+    notify_time = time.fromisoformat(time_str) if time_str else None
+    await set_event_notify(user_id, callback_data.shop_id, event, lead, notify_time)
+
+    when = lead_days_label(lead).lower()
+    time_label = notify_time.strftime("%H:%M") if notify_time else "как в общих настройках"
+    await call.message.answer(
+        f"✅ Настроено: {EVENT_LABELS_RU[event].lower()} — {when} в {time_label}."
+    )
+    text, kb = await _cycle_notif_view(user_id, callback_data.shop_id, callback_data.src, callback_data.page)
+    await call.message.answer(text, reply_markup=kb)
+    await call.answer()
+
+
+@router.callback_query(ShopNotifCb.filter(F.action == "evoff"))
+async def cb_event_off(call: CallbackQuery, callback_data: ShopNotifCb) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    event = callback_data.value
+    await disable_event_notify(user_id, callback_data.shop_id, event)
+    text, kb = await _cycle_notif_view(user_id, callback_data.shop_id, callback_data.src, callback_data.page)
+    await show_text_view(call, text, kb)
+    await call.answer(await t("settings.toggle_off"))
 
 
 @router.callback_query(ShopNotifCb.filter(F.action == "twd"))

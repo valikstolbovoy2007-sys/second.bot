@@ -25,14 +25,15 @@ def _sub(**overrides) -> dict:
 
 
 class TestPickEvents:
-    def test_arrival_when_flag_on(self) -> None:
-        assert pick_events_for_subscription(_sub(), ANCHOR, set()) == ["arrival"]
+    # arrival/max_discount moved to the lead-days-aware engine
+    # (services.notifier.run_lead_events) — pick_events_for_subscription now
+    # only handles same-day events: middle and the no-cycle weekday fallback.
 
-    def test_arrival_skipped_when_flag_off(self) -> None:
-        assert pick_events_for_subscription(_sub(notify_arrival=False), ANCHOR, set()) == []
+    def test_arrival_day_no_longer_picked_here(self) -> None:
+        assert pick_events_for_subscription(_sub(), ANCHOR, set()) == []
 
-    def test_max_discount_picked(self) -> None:
-        assert pick_events_for_subscription(_sub(), date(2026, 4, 14), set()) == ["max_discount"]
+    def test_max_discount_day_no_longer_picked_here(self) -> None:
+        assert pick_events_for_subscription(_sub(), date(2026, 4, 14), set()) == []
 
     def test_middle_skipped_when_flag_off(self) -> None:
         # day 7 = middle

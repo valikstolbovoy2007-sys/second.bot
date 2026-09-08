@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import time
 
 from data.db import pool
 from data.repos.shops import Shop, _row_to_shop
@@ -12,6 +13,75 @@ class SubFlags:
 
 
 VALID_FLAGS = {"notify_arrival", "notify_max_discount", "notify_middle"}
+
+# "arrival" / "max_discount" — the two events configurable through the
+# multi-step notification wizard (see handlers/settings.py). Each maps to
+# its own enabled-flag and lead_days/notify_time column pair.
+_EVENT_COLUMNS = {
+    "arrival": ("notify_arrival", "arrival_lead_days", "arrival_notify_time"),
+    "max_discount": ("notify_max_discount", "discount_lead_days", "discount_notify_time"),
+}
+
+
+@dataclass(frozen=True)
+class EventNotifySetting:
+    enabled: bool
+    lead_days: int
+    notify_time: time | None  # None = use the user's global notify_time
+
+
+async def get_event_settings(user_id: int, shop_id: int) -> dict[str, EventNotifySetting] | None:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT notify_arrival, arrival_lead_days, arrival_notify_time,
+                   notify_max_discount, discount_lead_days, discount_notify_time
+            FROM subscriptions WHERE user_id = $1 AND shop_id = $2
+            """,
+            user_id, shop_id,
+        )
+    if not row:
+        return None
+    return {
+        "arrival": EventNotifySetting(
+            enabled=row["notify_arrival"],
+            lead_days=row["arrival_lead_days"],
+            notify_time=row["arrival_notify_time"],
+        ),
+        "max_discount": EventNotifySetting(
+            enabled=row["notify_max_discount"],
+            lead_days=row["discount_lead_days"],
+            notify_time=row["discount_notify_time"],
+        ),
+    }
+
+
+async def set_event_notify(
+    user_id: int, shop_id: int, event: str, lead_days: int, notify_time: time | None,
+) -> None:
+    if event not in _EVENT_COLUMNS:
+        raise ValueError(f"unknown event: {event}")
+    flag_col, lead_col, time_col = _EVENT_COLUMNS[event]
+    async with pool().acquire() as conn:
+        await conn.execute(
+            f"""
+            UPDATE subscriptions
+            SET {flag_col} = true, {lead_col} = $3, {time_col} = $4
+            WHERE user_id = $1 AND shop_id = $2
+            """,
+            user_id, shop_id, lead_days, notify_time,
+        )
+
+
+async def disable_event_notify(user_id: int, shop_id: int, event: str) -> None:
+    if event not in _EVENT_COLUMNS:
+        raise ValueError(f"unknown event: {event}")
+    flag_col, _lead_col, _time_col = _EVENT_COLUMNS[event]
+    async with pool().acquire() as conn:
+        await conn.execute(
+            f"UPDATE subscriptions SET {flag_col} = false WHERE user_id = $1 AND shop_id = $2",
+            user_id, shop_id,
+        )
 
 
 async def is_subscribed(user_id: int, shop_id: int) -> bool:

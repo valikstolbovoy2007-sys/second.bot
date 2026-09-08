@@ -56,6 +56,35 @@ async def fetch_user_weekdays(user_id: int) -> dict[int, set[int]]:
     return out
 
 
+async def fetch_lead_event_candidates(today: date) -> list[dict]:
+    """One row per (user, shop) subscription with arrival/max_discount
+    notifications enabled, joined with the shop's cycle fields and the
+    user's tg_id + global notify_time (fallback when no per-event time is
+    set). Used by the lead-days-aware notification engine — see
+    services.notifier.run_lead_events.
+    """
+    async with pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT u.id AS user_id, u.tg_id, u.notify_time AS global_time,
+                   s.id AS shop_id, s.name, s.address,
+                   s.cycle_length, s.anchor_date,
+                   s.monthly_weekday, s.monthly_occurrence,
+                   sub.notify_arrival, sub.arrival_lead_days, sub.arrival_notify_time,
+                   sub.notify_max_discount, sub.discount_lead_days, sub.discount_notify_time
+            FROM subscriptions sub
+            JOIN shops s ON s.id = sub.shop_id
+            JOIN users u ON u.id = sub.user_id
+            WHERE s.is_active = true
+              AND u.is_blocked = false
+              AND (u.pause_until IS NULL OR u.pause_until <= $1)
+              AND (sub.notify_arrival OR sub.notify_max_discount)
+            """,
+            today,
+        )
+    return [dict(r) for r in rows]
+
+
 async def already_sent(
     user_id: int,
     items: Iterable[tuple[int, str]],

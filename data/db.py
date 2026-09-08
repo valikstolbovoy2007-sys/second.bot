@@ -236,6 +236,13 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_weekday SMALLINT;
 -- когда monthly_weekday не NULL — см. services.cycle.resolve_cycle_info.
 ALTER TABLE shops           DROP COLUMN IF EXISTS monthly_last;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_occurrence SMALLINT NOT NULL DEFAULT 1;
+-- Per-subscription lead time + custom notify time for the arrival/
+-- max_discount events (per-shop notification wizard). NULL *_notify_time
+-- means "use the user's global notify_time" — see services.notifier.
+ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS arrival_lead_days SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS arrival_notify_time TIME;
+ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS discount_lead_days SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS discount_notify_time TIME;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и
 -- удаляем колонку. Обе операции идемпотентны — повторный запуск ничего
