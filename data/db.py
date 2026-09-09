@@ -14,9 +14,12 @@ CREATE TABLE IF NOT EXISTS users (
     id          SERIAL PRIMARY KEY,
     tg_id       BIGINT UNIQUE NOT NULL,
     username    TEXT,
-    notify_time TIME NOT NULL DEFAULT '09:00',
     pause_until DATE,
     is_blocked  BOOLEAN NOT NULL DEFAULT false,
+    -- Global switches: arrival warning fires 1 day before at 9:00, cheap-day
+    -- warning fires same-day at 9:00 — see services.notifier.
+    notify_arrival   BOOLEAN NOT NULL DEFAULT true,
+    notify_cheap_day BOOLEAN NOT NULL DEFAULT true,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -39,17 +42,7 @@ CREATE TABLE IF NOT EXISTS shops (
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id             INT  NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     shop_id             INT  NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-    notify_arrival      BOOLEAN NOT NULL DEFAULT true,
-    notify_max_discount BOOLEAN NOT NULL DEFAULT true,
-    notify_middle       BOOLEAN NOT NULL DEFAULT false,
     PRIMARY KEY (user_id, shop_id)
-);
-
-CREATE TABLE IF NOT EXISTS notification_weekdays (
-    user_id INT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    shop_id INT      NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-    weekday SMALLINT NOT NULL CHECK (weekday BETWEEN 0 AND 6),
-    PRIMARY KEY (user_id, shop_id, weekday)
 );
 
 CREATE TABLE IF NOT EXISTS sent_notifications (
@@ -236,13 +229,24 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_weekday SMALLINT;
 -- когда monthly_weekday не NULL — см. services.cycle.resolve_cycle_info.
 ALTER TABLE shops           DROP COLUMN IF EXISTS monthly_last;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_occurrence SMALLINT NOT NULL DEFAULT 1;
--- Per-subscription lead time + custom notify time for the arrival/
--- max_discount events (per-shop notification wizard). NULL *_notify_time
--- means "use the user's global notify_time" — see services.notifier.
-ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS arrival_lead_days SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS arrival_notify_time TIME;
-ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS discount_lead_days SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE subscriptions   ADD COLUMN IF NOT EXISTS discount_notify_time TIME;
+-- Per-shop notification settings (toggle flags, weekday reminders, and the
+-- short-lived lead-days/custom-time wizard) were all replaced by a single
+-- global per-user toggle — see notify_arrival/notify_cheap_day on `users`.
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS notify_arrival;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS notify_max_discount;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS notify_middle;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS arrival_lead_days;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS arrival_notify_time;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS discount_lead_days;
+ALTER TABLE subscriptions   DROP COLUMN IF EXISTS discount_notify_time;
+DROP TABLE IF EXISTS notification_weekdays;
+-- Global per-user switches: arrival warning fires 1 day before, at 9:00;
+-- cheap-day warning fires the same day, at 9:00 — both fixed, not
+-- configurable per-shop. Applies to every tracked (subscribed) shop.
+-- Replaces the old single `notify_time` picker (no longer used).
+ALTER TABLE users           ADD COLUMN IF NOT EXISTS notify_arrival BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users           ADD COLUMN IF NOT EXISTS notify_cheap_day BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users           DROP COLUMN IF EXISTS notify_time;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и
 -- удаляем колонку. Обе операции идемпотентны — повторный запуск ничего
@@ -263,7 +267,6 @@ BEGIN
 END$$;
 CREATE INDEX IF NOT EXISTS subscriptions_user_idx        ON subscriptions(user_id);
 CREATE INDEX IF NOT EXISTS subscriptions_shop_idx        ON subscriptions(shop_id);
-CREATE INDEX IF NOT EXISTS notification_weekdays_user_idx ON notification_weekdays(user_id);
 CREATE INDEX IF NOT EXISTS shop_assignments_admin_idx    ON shop_assignments(admin_tg_id);
 CREATE INDEX IF NOT EXISTS sent_notifications_user_idx   ON sent_notifications(user_id);
 """

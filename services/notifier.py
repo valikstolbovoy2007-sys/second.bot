@@ -1,43 +1,30 @@
 import html
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from data.repos.notifier_repo import (
     already_sent,
-    fetch_lead_event_candidates,
-    fetch_user_subscriptions,
-    fetch_user_weekdays,
+    fetch_notify_candidates,
     mark_blocked,
     mark_sent,
-    users_due_at,
 )
-from services.cycle import EventType, days_until, events_on, humanize_days, resolve_cycle_info
+from services.cycle import EventType, days_until, humanize_days, resolve_cycle_info
 
 log = logging.getLogger(__name__)
 
+NOTIFY_AT = time(9, 0)
+ARRIVAL_LEAD_DAYS = 1
+CHEAP_DAY_LEAD_DAYS = 0
 
 EVENT_HEADERS: dict[str, str] = {
-    "arrival": "🆕 День завоза",
-    "max_discount": "💰 Максимальная скидка (завтра новый завоз)",
-    "middle": "⚖️ Середина цикла",
-    "weekday": "📅 Напоминание",
+    "arrival": "🚚 Завоз",
+    "cheap_day": "💰 Дешёвый день",
 }
-EVENT_ORDER: list[str] = ["arrival", "max_discount", "middle", "weekday"]
-
-_EVENT_FIELD: dict[EventType, str] = {
-    EventType.ARRIVAL: "notify_arrival",
-    EventType.MAX_DISCOUNT: "notify_max_discount",
-    EventType.MIDDLE: "notify_middle",
-}
-_EVENT_NAME: dict[EventType, str] = {
-    EventType.ARRIVAL: "arrival",
-    EventType.MAX_DISCOUNT: "max_discount",
-    EventType.MIDDLE: "middle",
-}
+EVENT_ORDER: list[str] = ["arrival", "cheap_day"]
 
 
 @dataclass(frozen=True)
@@ -46,25 +33,7 @@ class Trigger:
     shop_name: str
     address: str
     event_type: str
-    lead_days: int = 0  # 0 = "today"; >0 = "N days ahead" (arrival/max_discount only)
-
-
-def pick_events_for_subscription(sub: dict, today: date, weekdays: set[int]) -> list[str]:
-    """Same-day events only — arrival/max_discount now go through the
-    lead-days-aware engine (see run_lead_events) so they're skipped here.
-    """
-    events: list[str] = []
-    info = resolve_cycle_info(
-        sub["cycle_length"], sub["anchor_date"], sub.get("monthly_weekday"), today,
-        monthly_occurrence=int(sub.get("monthly_occurrence") or 1),
-    )
-    if info is not None:
-        if EventType.MIDDLE in events_on(today, info) and sub.get("notify_middle"):
-            events.append("middle")
-    else:
-        if today.weekday() in weekdays:
-            events.append("weekday")
-    return events
+    lead_days: int = 0  # 0 = "сегодня"; 1 = "завтра", etc.
 
 
 def format_message(triggers: list[Trigger]) -> str:
@@ -89,58 +58,13 @@ def format_message(triggers: list[Trigger]) -> str:
     return "\n".join(lines).rstrip()
 
 
-async def collect_triggers(user_id: int, today: date) -> list[Trigger]:
-    subs = await fetch_user_subscriptions(user_id)
-    if not subs:
-        return []
-    weekdays_map = await fetch_user_weekdays(user_id)
-
-    candidates: list[Trigger] = []
-    for sub in subs:
-        events = pick_events_for_subscription(
-            sub, today, weekdays_map.get(int(sub["shop_id"]), set())
-        )
-        for ev in events:
-            candidates.append(Trigger(
-                shop_id=int(sub["shop_id"]),
-                shop_name=sub["name"],
-                address=sub["address"],
-                event_type=ev,
-            ))
-
-    if not candidates:
-        return []
-
-    sent = await already_sent(
-        user_id, [(c.shop_id, c.event_type) for c in candidates], today
-    )
-    return [c for c in candidates if (c.shop_id, c.event_type) not in sent]
-
-
 async def run_for_minute(bot: Bot, when: datetime) -> None:
+    """Both events fire at a fixed time (9:00) — nothing to do off-schedule."""
+    if when.time().replace(second=0, microsecond=0) != NOTIFY_AT:
+        return
+
     today = when.date()
-    minute_time = when.time().replace(second=0, microsecond=0)
-    user_ids = await users_due_at(minute_time, today)
-    if user_ids:
-        log.info("notify tick %s: %d users due", minute_time.strftime("%H:%M"), len(user_ids))
-
-    for user_id in user_ids:
-        triggers = await collect_triggers(user_id, today)
-        if not triggers:
-            continue
-        await _send_and_mark(bot, user_id, triggers, today)
-
-    await run_lead_events(bot, when)
-
-
-async def run_lead_events(bot: Bot, when: datetime) -> None:
-    """Fires arrival/max_discount notifications configured with a custom
-    lead time and/or a per-event notify time (the per-shop wizard) —
-    independent of the user's global notify_time, checked every tick.
-    """
-    today = when.date()
-    tick = when.time().replace(second=0, microsecond=0)
-    rows = await fetch_lead_event_candidates(today)
+    rows = await fetch_notify_candidates(today)
     if not rows:
         return
 
@@ -153,25 +77,19 @@ async def run_lead_events(bot: Bot, when: datetime) -> None:
         )
         if info is None:
             continue
-        global_time = row["global_time"]
-        tg_by_user[int(row["user_id"])] = int(row["tg_id"])
+        user_id = int(row["user_id"])
+        tg_by_user[user_id] = int(row["tg_id"])
 
-        if row["notify_arrival"]:
-            eff = (row["arrival_notify_time"] or global_time).replace(second=0, microsecond=0)
-            lead = int(row["arrival_lead_days"] or 0)
-            if eff == tick and days_until(today, info, EventType.ARRIVAL) == lead:
-                by_user.setdefault(int(row["user_id"]), []).append(Trigger(
-                    shop_id=int(row["shop_id"]), shop_name=row["name"],
-                    address=row["address"], event_type="arrival", lead_days=lead,
-                ))
-        if row["notify_max_discount"]:
-            eff = (row["discount_notify_time"] or global_time).replace(second=0, microsecond=0)
-            lead = int(row["discount_lead_days"] or 0)
-            if eff == tick and days_until(today, info, EventType.MAX_DISCOUNT) == lead:
-                by_user.setdefault(int(row["user_id"]), []).append(Trigger(
-                    shop_id=int(row["shop_id"]), shop_name=row["name"],
-                    address=row["address"], event_type="max_discount", lead_days=lead,
-                ))
+        if row["notify_arrival"] and days_until(today, info, EventType.ARRIVAL) == ARRIVAL_LEAD_DAYS:
+            by_user.setdefault(user_id, []).append(Trigger(
+                shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
+                event_type="arrival", lead_days=ARRIVAL_LEAD_DAYS,
+            ))
+        if row["notify_cheap_day"] and days_until(today, info, EventType.MAX_DISCOUNT) == CHEAP_DAY_LEAD_DAYS:
+            by_user.setdefault(user_id, []).append(Trigger(
+                shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
+                event_type="cheap_day", lead_days=CHEAP_DAY_LEAD_DAYS,
+            ))
 
     for user_id, triggers in by_user.items():
         sent = await already_sent(

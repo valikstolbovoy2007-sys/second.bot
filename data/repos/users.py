@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date
 
 from data.db import pool
 
@@ -8,8 +8,9 @@ from data.db import pool
 class UserSettings:
     id: int
     tg_id: int
-    notify_time: time
     pause_until: date | None
+    notify_arrival: bool
+    notify_cheap_day: bool
 
 
 async def upsert_user(tg_id: int, username: str | None) -> int:
@@ -46,7 +47,8 @@ async def is_admin(tg_id: int) -> bool:
 async def get_settings(user_id: int) -> UserSettings | None:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, tg_id, notify_time, pause_until FROM users WHERE id = $1",
+            "SELECT id, tg_id, pause_until, notify_arrival, notify_cheap_day "
+            "FROM users WHERE id = $1",
             user_id,
         )
     if not row:
@@ -54,16 +56,10 @@ async def get_settings(user_id: int) -> UserSettings | None:
     return UserSettings(
         id=row["id"],
         tg_id=row["tg_id"],
-        notify_time=row["notify_time"],
         pause_until=row["pause_until"],
+        notify_arrival=row["notify_arrival"],
+        notify_cheap_day=row["notify_cheap_day"],
     )
-
-
-async def set_notify_time(user_id: int, t: time) -> None:
-    async with pool().acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET notify_time = $2 WHERE id = $1", user_id, t,
-        )
 
 
 async def set_pause_until(user_id: int, d: date | None) -> None:
@@ -71,3 +67,23 @@ async def set_pause_until(user_id: int, d: date | None) -> None:
         await conn.execute(
             "UPDATE users SET pause_until = $2 WHERE id = $1", user_id, d,
         )
+
+
+async def toggle_notify_arrival(user_id: int) -> bool:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE users SET notify_arrival = NOT notify_arrival WHERE id = $1 "
+            "RETURNING notify_arrival",
+            user_id,
+        )
+    return bool(row["notify_arrival"])
+
+
+async def toggle_notify_cheap_day(user_id: int) -> bool:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE users SET notify_cheap_day = NOT notify_cheap_day WHERE id = $1 "
+            "RETURNING notify_cheap_day",
+            user_id,
+        )
+    return bool(row["notify_cheap_day"])

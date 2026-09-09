@@ -263,14 +263,6 @@ def shop_card_kb(
             action="report", page=page, flt=flt, sort=sort, shop_id=shop_id,
         ).pack(),
     )])
-    if is_tracked:
-        from keyboards.settings_kb import ShopNotifCb
-        rows.append([InlineKeyboardButton(
-            text="⚙️ Настройки уведомлений",
-            callback_data=ShopNotifCb(
-                shop_id=shop_id, action="open", src=src, page=page,
-            ).pack(),
-        )])
     if src == "my":
         from keyboards.my_shops_kb import MyShopsCb
         rows.append([InlineKeyboardButton(

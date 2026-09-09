@@ -143,15 +143,8 @@ DEFAULTS: dict[str, str] = {
 
     # settings
     "settings.title":              "⚙️ <b>Настройки</b>",
-    "settings.notify_time":        "🕐 Время уведомлений · <b>{time}</b>",
     "settings.pause_active":       "⏸ На паузе до <b>{date}</b>",
     "settings.pause_off":          "🔔 Уведомления активны",
-    "settings.time_picker": (
-        "🕐 <b>Время уведомлений</b>\n"
-        "\n"
-        "Когда присылать напоминания?"
-    ),
-    "settings.time_saved":         "🕐 Сохранено: {time}",
     "settings.pause_picker": (
         "⏸ <b>Пауза уведомлений</b>\n"
         "\n"
@@ -159,12 +152,6 @@ DEFAULTS: dict[str, str] = {
     ),
     "settings.pause_off_done":     "▶️ Пауза снята",
     "settings.pause_set_done":     "⏸ Пауза до {date}",
-    "settings.shop_notif_title":   "⚙️ <b>Уведомления · «{shop_name}»</b>",
-    "settings.shop_notif_cycle":   "<i>Отметь события, о которых напоминать</i>",
-    "settings.shop_notif_wdays": (
-        "<i>У магазина нет цикла — выбери дни недели для напоминаний</i>"
-    ),
-    "settings.need_track":         "Сначала добавь магазин в 💘 Ну мои",
     "settings.toggle_on":          "✅ Включено",
     "settings.toggle_off":         "⬜ Выключено",
 
@@ -181,11 +168,8 @@ PLACEHOLDERS: dict[str, set[str]] = {
     "myshops.unsub_all_ask":    {"count"},
     "myshops.unsub_all_done":   {"count"},
     "myshops.sub_all_done":     {"count"},
-    "settings.notify_time":     {"time"},
     "settings.pause_active":    {"date"},
-    "settings.time_saved":      {"time"},
     "settings.pause_set_done":  {"date"},
-    "settings.shop_notif_title":{"shop_name"},
 }
 
 

@@ -1,84 +1,31 @@
-from datetime import date, datetime, time
+from datetime import date, datetime
 from typing import Iterable
 
 from data.db import pool
 
 
-async def users_due_at(t: time, today: date) -> list[int]:
-    async with pool().acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id FROM users
-            WHERE notify_time = $1
-              AND is_blocked = false
-              AND (pause_until IS NULL OR pause_until <= $2)
-            """,
-            t.replace(second=0, microsecond=0), today,
-        )
-    return [int(r["id"]) for r in rows]
-
-
-async def fetch_user_subscriptions(user_id: int) -> list[dict]:
-    async with pool().acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT s.id          AS shop_id,
-                   s.name        AS name,
-                   s.address     AS address,
-                   s.cycle_length,
-                   s.anchor_date,
-                   s.monthly_weekday,
-                   s.monthly_occurrence,
-                   sub.notify_arrival,
-                   sub.notify_max_discount,
-                   sub.notify_middle
-            FROM subscriptions sub
-            JOIN shops s ON s.id = sub.shop_id
-            WHERE sub.user_id = $1 AND s.is_active = true
-            """,
-            user_id,
-        )
-    return [dict(r) for r in rows]
-
-
-async def fetch_user_weekdays(user_id: int) -> dict[int, set[int]]:
-    async with pool().acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT shop_id, weekday FROM notification_weekdays
-            WHERE user_id = $1
-            """,
-            user_id,
-        )
-    out: dict[int, set[int]] = {}
-    for r in rows:
-        out.setdefault(int(r["shop_id"]), set()).add(int(r["weekday"]))
-    return out
-
-
-async def fetch_lead_event_candidates(today: date) -> list[dict]:
-    """One row per (user, shop) subscription with arrival/max_discount
-    notifications enabled, joined with the shop's cycle fields and the
-    user's tg_id + global notify_time (fallback when no per-event time is
-    set). Used by the lead-days-aware notification engine — see
-    services.notifier.run_lead_events.
+async def fetch_notify_candidates(today: date) -> list[dict]:
+    """One row per (user, shop) subscription for a user who has at least
+    one of the two global notification switches on, joined with the shop's
+    cycle fields and the user's tg_id. Arrival fires 1 day before, at
+    9:00; cheap-day fires the same day, at 9:00 — both fixed (see
+    services.notifier.run_for_minute).
     """
     async with pool().acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT u.id AS user_id, u.tg_id, u.notify_time AS global_time,
+            SELECT u.id AS user_id, u.tg_id,
                    s.id AS shop_id, s.name, s.address,
                    s.cycle_length, s.anchor_date,
                    s.monthly_weekday, s.monthly_occurrence,
-                   sub.notify_arrival, sub.arrival_lead_days, sub.arrival_notify_time,
-                   sub.notify_max_discount, sub.discount_lead_days, sub.discount_notify_time
+                   u.notify_arrival, u.notify_cheap_day
             FROM subscriptions sub
             JOIN shops s ON s.id = sub.shop_id
             JOIN users u ON u.id = sub.user_id
             WHERE s.is_active = true
               AND u.is_blocked = false
               AND (u.pause_until IS NULL OR u.pause_until <= $1)
-              AND (sub.notify_arrival OR sub.notify_max_discount)
+              AND (u.notify_arrival OR u.notify_cheap_day)
             """,
             today,
         )
