@@ -183,7 +183,13 @@ async def msg_reply_send(message: Message, state: FSMContext, bot: Bot) -> None:
     text = message.html_text
     async with pool().acquire() as conn:
         target = await conn.fetchrow(
-            "SELECT u.tg_id FROM feedback f JOIN users u ON u.id = f.user_id WHERE f.id = $1",
+            """
+            SELECT u.tg_id, f.text, f.created_at, s.name AS shop_name
+            FROM feedback f
+            JOIN users u ON u.id = f.user_id
+            LEFT JOIN shops s ON s.id = f.shop_id
+            WHERE f.id = $1
+            """,
             fb_id,
         )
     await state.clear()
@@ -191,7 +197,19 @@ async def msg_reply_send(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer("Не нашёл пользователя.")
         return
     try:
-        await bot.send_message(target["tg_id"], f"💬 Ответ от админа:\n\n{text}")
+        parts = ["💬 <b>Ответ на твоё сообщение</b>"]
+        if target["shop_name"]:
+            parts.append(f"🛍 Магазин: <b>{html.escape(target['shop_name'])}</b>")
+        parts.append(f"📅 {target['created_at'].strftime('%d.%m.%Y %H:%M')}")
+        parts.append("")
+        parts.append(html.escape(target["text"] or ""))
+        parts.append("")
+        parts.append("────────────────")
+        parts.append("")
+        parts.append("💬 <b>Ответ админа:</b>")
+        parts.append("")
+        parts.append(text)
+        await bot.send_message(target["tg_id"], "\n".join(parts))
         async with pool().acquire() as conn:
             await conn.execute(
                 "INSERT INTO admin_messages (from_tg_id, to_tg_id, text, feedback_id) VALUES ($1,$2,$3,$4)",
