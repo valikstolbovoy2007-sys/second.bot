@@ -54,7 +54,8 @@ FIELDS = {
 
 class ShopCb(CallbackData, prefix="admshops"):
     action: str       # list, card, edit, save, deact, act, delete, deletec,
-                      # anchor_input (ввести дату), anchor_days (по неделе в месяце)
+                      # anchor_input (ввести дату), anchor_days (по неделе в месяце),
+                      # cancel_edit (удалить временное окно редактирования)
     page: int = 0
     shop_id: int = 0
     field: str | None = None
@@ -279,7 +280,7 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
             )],
             [InlineKeyboardButton(
                 text="✖️ Отмена",
-                callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+                callback_data=ShopCb(action="cancel_edit").pack(),
             )],
         ]
         await call.message.answer(
@@ -338,12 +339,19 @@ async def cb_anchor_days(call: CallbackQuery, callback_data: ShopCb) -> None:
         rows.append(row)
     rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
-        callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+        callback_data=ShopCb(action="cancel_edit").pack(),
     )])
     await call.message.answer(
         "🗓 Выбери день недели месяца (дальше уточнишь, какая по счёту неделя):",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
+    await call.answer()
+
+
+@router.callback_query(ShopCb.filter(F.action == "cancel_edit"))
+async def cb_cancel_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.message.delete()
     await call.answer()
 
 
@@ -365,7 +373,7 @@ async def cb_anchor_pick_weekday(call: CallbackQuery, callback_data: AnchorWdCb)
     ]
     rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
-        callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+        callback_data=ShopCb(action="cancel_edit").pack(),
     )])
     await call.message.answer(
         f"Какая по счёту {_WEEKDAY_RU[callback_data.wd]} месяца?",
