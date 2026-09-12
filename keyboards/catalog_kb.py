@@ -39,7 +39,7 @@ SORT_LABELS: dict[str, str] = {
 
 class CatalogCb(CallbackData, prefix="cat"):
     # action: list | shop | filter | more | sort_open | sort_pick |
-    #         search_start | search_clear | reset | sched
+    #         search_start | search_clear | reset | sched | report
     action: str
     page: int = 0
     flt: str = FLT_ALL
@@ -48,6 +48,9 @@ class CatalogCb(CallbackData, prefix="cat"):
     # Telegram decodes an empty trailing callback segment as None.  This field
     # is only populated for sort_pick, so accept both forms for other actions.
     value: str | None = ""  # for sort_pick / filter codes too long for `flt`
+    # Откуда открыта карточка магазина / расписание: "cat" (каталог)
+    # или "my" (Ну мои) — чтобы «Назад» возвращал в правильный список.
+    src: str = "cat"
 
 
 class TrackCb(CallbackData, prefix="trk"):
@@ -239,7 +242,8 @@ def shop_card_kb(
     не открыться, а url-кнопка работает везде.
 
     `on_schedule` — True когда уже открыт экран «Расписание цен» для этого
-    магазина: сама кнопка перехода туда тогда не нужна.
+    магазина: сама кнопка перехода туда не нужна, а «Назад» ведёт обратно
+    к карточке магазина (`src` сохраняется).
     """
     track_text = "❌ Не отслеживать" if is_tracked else "💘 Отслеживать"
     rows: list[list[InlineKeyboardButton]] = [
@@ -254,16 +258,23 @@ def shop_card_kb(
         rows.append([InlineKeyboardButton(
             text="📋 Расписание цен",
             callback_data=CatalogCb(
-                action="sched", page=page, flt=flt, sort=sort, shop_id=shop_id,
+                action="sched", page=page, flt=flt, sort=sort, shop_id=shop_id, src=src,
             ).pack(),
         )])
     rows.append([InlineKeyboardButton(
         text="⚒️ Исправить неточность",
         callback_data=CatalogCb(
-            action="report", page=page, flt=flt, sort=sort, shop_id=shop_id,
+            action="report", page=page, flt=flt, sort=sort, shop_id=shop_id, src=src,
         ).pack(),
     )])
-    if src == "my":
+    if on_schedule:
+        rows.append([InlineKeyboardButton(
+            text="◀️ К сешке",
+            callback_data=CatalogCb(
+                action="shop", page=page, flt=flt, sort=sort, shop_id=shop_id, src=src,
+            ).pack(),
+        )])
+    elif src == "my":
         from keyboards.my_shops_kb import MyShopsCb
         rows.append([InlineKeyboardButton(
             text="◀️ К моим магазинам",

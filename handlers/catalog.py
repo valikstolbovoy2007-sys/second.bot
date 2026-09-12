@@ -158,7 +158,7 @@ async def cb_shop(call: CallbackQuery, callback_data: CatalogCb) -> None:
     tracked = await is_subscribed(user_id, shop.id)
     has_prices = bool(shop.price_start and shop.price_step is not None)
     kb = shop_card_kb(
-        shop.id, tracked, src="cat",
+        shop.id, tracked, src=callback_data.src,
         page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
         has_prices=has_prices,
         maps_url=yandex_maps_url(shop.address),
@@ -180,7 +180,7 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
         call,
         format_price_schedule(shop, date.today()),
         shop_card_kb(
-            shop.id, tracked, src="cat",
+            shop.id, tracked, src=callback_data.src,
             page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
             has_prices=has_prices,
             maps_url=yandex_maps_url(shop.address),
