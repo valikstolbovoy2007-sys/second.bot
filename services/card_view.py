@@ -74,7 +74,7 @@ async def show_shop_card(
     msg = call.message
     was_photo = bool(msg.photo)
 
-    if _requires_teleport(call):
+    if await _requires_teleport(call):
         # Внизу появились свежие сообщения бота (уведомление и т.п.) —
         # карточка «телепортируется» в конец чата, под них.
         await _teleport(call)
@@ -126,7 +126,7 @@ async def show_text_view(
 ) -> None:
     """Render a plain-text screen, correctly handling a previous photo card."""
     msg = call.message
-    if _requires_teleport(call):
+    if await _requires_teleport(call):
         await _teleport(call)
         sent = await _resend_text(msg, text, kb)
         journal.record(msg.chat.id, sent.message_id)
