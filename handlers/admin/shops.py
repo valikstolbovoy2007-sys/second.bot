@@ -53,7 +53,8 @@ FIELDS = {
 
 
 class ShopCb(CallbackData, prefix="admshops"):
-    action: str       # list, card, edit, save, deact, act, delete, deletec
+    action: str       # list, card, edit, save, deact, act, delete, deletec,
+                      # anchor_input (ввести дату), anchor_days (по неделе в месяце)
     page: int = 0
     shop_id: int = 0
     field: str | None = None
@@ -262,31 +263,87 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
         await call.answer("Это поле редактируется супер-админом", show_alert=True)
         return
     label, _ = FIELDS[callback_data.field]
+    if callback_data.field == "anchor":
+        rows = [
+            [InlineKeyboardButton(
+                text="📅 Ввести дату (YYYY-MM-DD)",
+                callback_data=ShopCb(
+                    action="anchor_input", shop_id=callback_data.shop_id, page=callback_data.page,
+                ).pack(),
+            )],
+            [InlineKeyboardButton(
+                text="🗓 Настройка по неделе в месяце",
+                callback_data=ShopCb(
+                    action="anchor_days", shop_id=callback_data.shop_id, page=callback_data.page,
+                ).pack(),
+            )],
+            [InlineKeyboardButton(
+                text="✖️ Отмена",
+                callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+            )],
+        ]
+        await call.message.answer(
+            "✏️ <b>Anchor</b> — как задать точку отсчёта?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await call.answer()
+        return
     await state.set_state(EditStates.value)
     await state.update_data(
         shop_id=callback_data.shop_id, field=callback_data.field, page=callback_data.page
     )
     rows = []
-    if callback_data.field == "anchor":
-        for i in range(0, 7, 2):
-            row = [
-                InlineKeyboardButton(
-                    text=wd,
-                    callback_data=AnchorWdCb(
-                        shop_id=callback_data.shop_id, page=callback_data.page, wd=i + j,
-                    ).pack(),
-                )
-                for j, wd in enumerate(_WEEKDAY_RU[i:i + 2])
-            ]
-            rows.append(row)
     rows.append([InlineKeyboardButton(
         text="✖️ Отмена",
         callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
     )])
     prompt = f"Введи новое значение поля «{label}»:"
-    if callback_data.field == "anchor":
-        prompt += "\nИли выбери день недели месяца (дальше уточнишь, какая по счёту неделя):"
     await call.message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await call.answer()
+
+
+@router.callback_query(ShopCb.filter(F.action == "anchor_input"))
+async def cb_anchor_input_start(call: CallbackQuery, callback_data: ShopCb, state: FSMContext) -> None:
+    if not await can_access_shop(call.from_user.id, callback_data.shop_id):
+        await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(EditStates.value)
+    await state.update_data(
+        shop_id=callback_data.shop_id, field="anchor", page=callback_data.page,
+    )
+    await call.message.answer(
+        "📅 Введи дату завоза в формате <b>YYYY-MM-DD</b> (например 2026-09-15):"
+    )
+    await call.answer()
+
+
+@router.callback_query(ShopCb.filter(F.action == "anchor_days"))
+async def cb_anchor_days(call: CallbackQuery, callback_data: ShopCb) -> None:
+    if not await can_access_shop(call.from_user.id, callback_data.shop_id):
+        await audit_write(call.from_user.id, "access_denied", "shop", callback_data.shop_id)
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    rows = []
+    for i in range(0, 7, 2):
+        row = [
+            InlineKeyboardButton(
+                text=wd,
+                callback_data=AnchorWdCb(
+                    shop_id=callback_data.shop_id, page=callback_data.page, wd=i + j,
+                ).pack(),
+            )
+            for j, wd in enumerate(_WEEKDAY_RU[i:i + 2])
+        ]
+        rows.append(row)
+    rows.append([InlineKeyboardButton(
+        text="✖️ Отмена",
+        callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
+    )])
+    await call.message.answer(
+        "🗓 Выбери день недели месяца (дальше уточнишь, какая по счёту неделя):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
     await call.answer()
 
 
