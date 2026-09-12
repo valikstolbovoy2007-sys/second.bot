@@ -285,6 +285,14 @@ async def _edit_or_send(
         raise
 
 
+async def _safe_delete(message: Message) -> None:
+    """Тихим образом удаляем сообщение (введённый текст) — не падаем, если нельзя."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+
 @router.callback_query(ShopCb.filter(F.action == "edit"))
 async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMContext) -> None:
     if not await can_access_shop(call.from_user.id, callback_data.shop_id):
@@ -471,6 +479,8 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     kb = InlineKeyboardMarkup(inline_keyboard=[[_close_btn(shop_id, page)]])
 
     async def err(text: str) -> None:
+        # введённое сообщение сразу убираем — в чате остаётся только меню с ошибкой
+        await _safe_delete(message)
         if not await _edit_or_send(message.bot, chat_id, msg_id, text, kb):
             await message.answer(text)
 
@@ -538,6 +548,8 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     subs = await shop_subscribers_count(shop_id)
     is_super = await is_super_admin(message.from_user.id)
     card_kb = _card_kb(shop_id, page, shop.is_active, is_super)
+    # убираем введённый текст из чата — остаётся только обновлённое меню
+    await _safe_delete(message)
     if not await _edit_or_send(
         message.bot, chat_id, msg_id,
         f"✅ «{label}» обновлено.\n\n{_format_card(shop, subs)}",
