@@ -37,28 +37,27 @@ async def _resolve_photo_id(shop: Shop) -> str | None:
     return photos[0]["file_id"] if photos else None
 
 
-async def _delete(call: CallbackQuery) -> None:
+async def _resend_replace(
+    msg, *, photo_id: str | None, body: str, kb: InlineKeyboardMarkup,
+):
+    """Отправить новое сообщение и только потом удалить старое.
+
+    Так нет «провала» на месте исчезнувшего сообщения: сначала под ним
+    появляется новый контент, старое удаляется следом.
+    """
+    if photo_id:
+        sent = await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
+    else:
+        sent = await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
     try:
-        await call.message.delete()
+        await msg.delete()
     except TelegramBadRequest:
         pass
-
-
-async def _resend_photo(msg, photo_id: str, body: str, kb: InlineKeyboardMarkup) -> None:
-    return await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
-
-
-async def _resend_text(msg, body: str, kb: InlineKeyboardMarkup) -> None:
-    return await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
+    return sent
 
 
 async def _requires_teleport(call: CallbackQuery) -> bool:
     return journal.has_newer(call.message.chat.id, call.message.message_id)
-
-
-async def _teleport(call: CallbackQuery) -> None:
-    await _delete(call)
-    journal.drop_below(call.message.chat.id, call.message.message_id)
 
 
 async def show_shop_card(
@@ -78,11 +77,8 @@ async def show_shop_card(
     if await _requires_teleport(call):
         # Внизу появились свежие сообщения бота (уведомление и т.п.) —
         # карточка «телепортируется» в конец чата, под них.
-        await _teleport(call)
-        if photo_id:
-            sent = await _resend_photo(msg, photo_id, body, kb)
-        else:
-            sent = await _resend_text(msg, body, kb)
+        sent = await _resend_replace(msg, photo_id=photo_id, body=body, kb=kb)
+        journal.drop_below(msg.chat.id, msg.message_id)
         journal.record(msg.chat.id, sent.message_id)
         return sent.message_id
 
@@ -102,16 +98,14 @@ async def show_shop_card(
                     except TelegramBadRequest:
                         pass
                     return msg.message_id
-                # fall through: delete and resend
+                # fall through: resend
                 log.debug("edit_media failed (%s), resending", exc)
-        await _delete(call)
-        sent = await _resend_photo(msg, photo_id, body, kb)
+        sent = await _resend_replace(msg, photo_id=photo_id, body=body, kb=kb)
         return sent.message_id
 
     # No photo path
     if was_photo:
-        await _delete(call)
-        sent = await _resend_text(msg, body, kb)
+        sent = await _resend_replace(msg, photo_id=None, body=body, kb=kb)
         return sent.message_id
     try:
         await msg.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
@@ -129,13 +123,12 @@ async def show_text_view(
     """Render a plain-text screen; return the message id it now lives in."""
     msg = call.message
     if await _requires_teleport(call):
-        await _teleport(call)
-        sent = await _resend_text(msg, text, kb)
+        sent = await _resend_replace(msg, photo_id=None, body=text, kb=kb)
+        journal.drop_below(msg.chat.id, msg.message_id)
         journal.record(msg.chat.id, sent.message_id)
         return sent.message_id
     if msg.photo:
-        await _delete(call)
-        sent = await _resend_text(msg, text, kb)
+        sent = await _resend_replace(msg, photo_id=None, body=text, kb=kb)
         return sent.message_id
     try:
         await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)

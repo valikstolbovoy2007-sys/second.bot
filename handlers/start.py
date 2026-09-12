@@ -46,12 +46,13 @@ async def cb_menu(call: CallbackQuery) -> None:
     kb = await main_menu(is_admin=admin)
 
     if call.message.photo:
-        # Фото-сообщение (карточка) нельзя превратить в текстовое меню на месте.
+        # Фото-сообщение (карточка) нельзя превратить в текстовое меню на
+        # месте: сначала шлём меню, затем удаляем карточку (без «провала»).
+        await call.bot.send_message(chat_id=call.from_user.id, text=text, reply_markup=kb)
         try:
             await call.message.delete()
         except TelegramBadRequest:
             pass
-        await call.bot.send_message(chat_id=call.from_user.id, text=text, reply_markup=kb)
     else:
         await render(call.bot, call.message.chat.id, call.message.message_id, text, kb)
     await call.answer()

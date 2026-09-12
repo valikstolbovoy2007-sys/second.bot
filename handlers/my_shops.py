@@ -55,14 +55,14 @@ async def _render_list(call: CallbackQuery, page: int) -> None:
 async def _close_card_back_to_list(
     call: CallbackQuery, user_id: int, *, page: int,
 ) -> None:
-    """«Назад» с карточки: карточка удаляется, список снова появляется на месте."""
+    """«Назад» с карточки: список появляется, затем карточка удаляется."""
+    ws.close_card(user_id)
+    body, kb = await _myshops_payload(user_id, page=page)
+    await call.bot.send_message(call.message.chat.id, body, reply_markup=kb)
     try:
         await call.message.delete()
     except TelegramBadRequest:
         pass
-    ws.close_card(user_id)
-    body, kb = await _myshops_payload(user_id, page=page)
-    await call.bot.send_message(call.message.chat.id, body, reply_markup=kb)
     await call.answer()
 
 

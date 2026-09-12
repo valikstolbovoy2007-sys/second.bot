@@ -7,7 +7,8 @@
   - если под меню появилось сообщение бота (завоз/рассылка и т.п.) —
     меню удаляется и создаётся заново ниже этого сообщения;
   - переход фото↔текст (нет плоского edit из photo в text) делает
-    delete+resend — это вынужденная навигация, а не телепорт.
+    send+delete (сначала новое, потом старое) — это вынужденная навигация,
+    а не телепорт. Порядок «сначала новое» убирает визуальный «провал».
 """
 import asyncio
 from datetime import date
@@ -191,7 +192,8 @@ class TestShowTextView:
         call = _Call(bot, msg)
         with _patch("services.card_view", journal):
             asyncio.run(show_text_view(call, "Список", None))
-        assert msg.calls == ["delete", "answer"]
+        # новый контент сначала отправляется, старое удаляется следом
+        assert msg.calls == ["answer", "delete"]
         # журнал пуст → позже клик по этому экрану не телепортнётся
         assert not journal.has_newer(555, 42)
 
@@ -211,7 +213,7 @@ class TestShowShopCard:
         assert bot.calls == []
 
     def test_clean_card_with_photo_uses_delete_resend(self) -> None:
-        """Фото-карточка не превращается на месте (photo↔text) — delete+resend."""
+        """Фото-карточка не превращается на месте (photo↔text) — resend+delete."""
         journal = ChatJournal()
         bot = _Bot()
         msg = _Msg(chat_id=555, message_id=42)
@@ -220,7 +222,8 @@ class TestShowShopCard:
              patch("services.card_view.format_shop_card", new=AsyncMock(return_value="Карточка")), \
              patch("services.card_view.list_photos", new=AsyncMock(return_value=[{"file_id": "FILE123"}])):
             asyncio.run(show_shop_card(call, _shop(), date(2026, 9, 12), is_tracked=False, kb=None))
-        assert msg.calls == ["delete", "answer_photo"]
+        # новое (фото) сначала отправляется, старое удаляется следом
+        assert msg.calls == ["answer_photo", "delete"]
         assert not journal.has_newer(555, 42)
 
     def test_push_below_card_teleports(self) -> None:

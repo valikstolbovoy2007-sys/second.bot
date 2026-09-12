@@ -134,17 +134,17 @@ async def _render_catalog(
 async def _close_card_back_to_catalog(
     call: CallbackQuery, user_id: int, *, page: int, flt: str, sort: str,
 ) -> None:
-    """«Назад» с карточки: карточка удаляется, список снова появляется на месте."""
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    """«Назад» с карточки: список появляется, затем карточка удаляется."""
     ws.close_card(user_id)
     body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
     await call.bot.send_message(
         call.message.chat.id, body,
         reply_markup=kb, disable_web_page_preview=True,
     )
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
     await call.answer()
 
 
