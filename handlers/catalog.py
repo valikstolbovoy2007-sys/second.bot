@@ -25,7 +25,6 @@ from keyboards.catalog_kb import (
 )
 from services.card_render import format_price_schedule, phase_marker
 from services.card_view import show_shop_card, show_text_view
-from services.chat_journal import journal
 from services.chat_render import render
 from services.maps import yandex_maps_url
 from services.catalog import (
@@ -283,8 +282,7 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         body = await t(
             "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
         )
-        msg = await message.answer(body, reply_markup=empty_filter_kb(flt, has_search=bool(search)))
-        journal.record(message.chat.id, msg.message_id)
+        await message.answer(body, reply_markup=empty_filter_kb(flt, has_search=bool(search)))
         return
     page = 0
     page_shops = filtered[: PAGE_SIZE]
@@ -296,8 +294,7 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         phase_markers=markers,
         tracked_ids=sub_ids,
     )
-    msg = await message.answer(body, reply_markup=kb)
-    journal.record(message.chat.id, msg.message_id)
+    await message.answer(body, reply_markup=kb)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))

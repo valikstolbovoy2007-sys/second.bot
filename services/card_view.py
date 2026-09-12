@@ -45,13 +45,11 @@ async def _delete(call: CallbackQuery) -> None:
 
 
 async def _resend_photo(msg, photo_id: str, body: str, kb: InlineKeyboardMarkup) -> None:
-    sent = await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
-    journal.record(msg.chat.id, sent.message_id)
+    return await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
 
 
 async def _resend_text(msg, body: str, kb: InlineKeyboardMarkup) -> None:
-    sent = await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
-    journal.record(msg.chat.id, sent.message_id)
+    return await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
 
 
 async def _requires_teleport(call: CallbackQuery) -> bool:
@@ -81,9 +79,10 @@ async def show_shop_card(
         # карточка «телепортируется» в конец чата, под них.
         await _teleport(call)
         if photo_id:
-            await _resend_photo(msg, photo_id, body, kb)
+            sent = await _resend_photo(msg, photo_id, body, kb)
         else:
-            await _resend_text(msg, body, kb)
+            sent = await _resend_text(msg, body, kb)
+        journal.record(msg.chat.id, sent.message_id)
         return
 
     if photo_id:
@@ -129,7 +128,8 @@ async def show_text_view(
     msg = call.message
     if _requires_teleport(call):
         await _teleport(call)
-        await _resend_text(msg, text, kb)
+        sent = await _resend_text(msg, text, kb)
+        journal.record(msg.chat.id, sent.message_id)
         return
     if msg.photo:
         await _delete(call)
