@@ -18,6 +18,7 @@ from keyboards.settings_kb import (
     pause_picker_kb,
     settings_menu_kb,
 )
+from services.chat_render import render
 from services.texts import t
 
 log = logging.getLogger(__name__)
@@ -37,9 +38,10 @@ async def _render_settings(call: CallbackQuery) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     s = await get_settings(user_id)
     assert s is not None
-    await call.message.edit_text(
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
         await _settings_text(s.pause_until),
-        reply_markup=settings_menu_kb(s.pause_until),
+        settings_menu_kb(s.pause_until),
     )
     await call.answer()
 
@@ -48,9 +50,10 @@ async def _render_notify_menu(call: CallbackQuery) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     s = await get_settings(user_id)
     assert s is not None
-    await call.message.edit_text(
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
         await t("settings.notify_title"),
-        reply_markup=notify_settings_kb(s.notify_arrival, s.notify_cheap_day),
+        notify_settings_kb(s.notify_arrival, s.notify_cheap_day),
     )
     await call.answer()
 
@@ -92,9 +95,10 @@ async def cb_pause_menu(call: CallbackQuery, callback_data: SettingsCb) -> None:
     s = await get_settings(user_id)
     assert s is not None
     active = bool(s.pause_until and s.pause_until > date.today())
-    await call.message.edit_text(
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
         await t("settings.pause_picker"),
-        reply_markup=pause_picker_kb(active),
+        pause_picker_kb(active),
     )
     await call.answer()
 

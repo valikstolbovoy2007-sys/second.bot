@@ -25,6 +25,8 @@ from keyboards.catalog_kb import (
 )
 from services.card_render import format_price_schedule, phase_marker
 from services.card_view import show_shop_card, show_text_view
+from services.chat_journal import journal
+from services.chat_render import render
 from services.maps import yandex_maps_url
 from services.catalog import (
     FLT_ALL,
@@ -195,14 +197,11 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
 
 @router.callback_query(CatalogCb.filter(F.action == "more"))
 async def cb_more(call: CallbackQuery, callback_data: CatalogCb) -> None:
-    body = await t("catalog.more_title")
-    try:
-        await call.message.edit_text(
-            body, reply_markup=more_filters_kb(callback_data.flt, callback_data.sort),
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc):
-            raise
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
+        await t("catalog.more_title"),
+        more_filters_kb(callback_data.flt, callback_data.sort),
+    )
     await call.answer()
 
 
@@ -211,14 +210,11 @@ async def cb_more(call: CallbackQuery, callback_data: CatalogCb) -> None:
 
 @router.callback_query(CatalogCb.filter(F.action == "sort_open"))
 async def cb_sort_open(call: CallbackQuery, callback_data: CatalogCb) -> None:
-    body = await t("catalog.sort_title")
-    try:
-        await call.message.edit_text(
-            body, reply_markup=sort_kb(callback_data.flt, callback_data.sort),
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc):
-            raise
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
+        await t("catalog.sort_title"),
+        sort_kb(callback_data.flt, callback_data.sort),
+    )
     await call.answer()
 
 
@@ -239,14 +235,11 @@ async def cb_search_start(
     await state.update_data(
         cat_flt=callback_data.flt, cat_sort=callback_data.sort,
     )
-    try:
-        await call.message.edit_text(
-            await t("catalog.search.prompt"),
-            reply_markup=search_cancel_kb(callback_data.flt, callback_data.sort),
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc):
-            raise
+    await render(
+        call.bot, call.message.chat.id, call.message.message_id,
+        await t("catalog.search.prompt"),
+        search_cancel_kb(callback_data.flt, callback_data.sort),
+    )
     await call.answer()
 
 
@@ -290,7 +283,8 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         body = await t(
             "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
         )
-        await message.answer(body, reply_markup=empty_filter_kb(flt, has_search=bool(search)))
+        msg = await message.answer(body, reply_markup=empty_filter_kb(flt, has_search=bool(search)))
+        journal.record(message.chat.id, msg.message_id)
         return
     page = 0
     page_shops = filtered[: PAGE_SIZE]
@@ -302,7 +296,8 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         phase_markers=markers,
         tracked_ids=sub_ids,
     )
-    await message.answer(body, reply_markup=kb)
+    msg = await message.answer(body, reply_markup=kb)
+    journal.record(message.chat.id, msg.message_id)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))

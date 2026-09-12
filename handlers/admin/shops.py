@@ -2,7 +2,7 @@ import html
 import logging
 from datetime import date, datetime
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
@@ -28,6 +28,7 @@ from data.repos.shops import (
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
+from services.chat_render import render
 from services.cycle import EventType, OCCURRENCE_LAST, next_event_date, resolve_cycle_info
 
 log = logging.getLogger(__name__)
@@ -262,29 +263,6 @@ def _close_btn(shop_id: int, page: int) -> InlineKeyboardButton:
     )
 
 
-async def _edit_or_send(
-    bot: Bot,
-    chat_id: int,
-    message_id: int | None,
-    text: str,
-    reply_markup: InlineKeyboardMarkup | None = None,
-) -> bool:
-    """Перерисовываем окно на месте; если сообщение уже удалено — False (= прислать новым)."""
-    if message_id is None:
-        return False
-    try:
-        await bot.edit_message_text(
-            text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup
-        )
-        return True
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            return True
-        if "message to edit not found" in str(e):
-            return False
-        raise
-
-
 async def _safe_delete(message: Message) -> None:
     """Тихим образом удаляем сообщение (введённый текст) — не падаем, если нельзя."""
     try:
@@ -330,13 +308,12 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
         shop_id=callback_data.shop_id,
         field=callback_data.field,
         page=callback_data.page,
-        edit_chat_id=call.message.chat.id,
-        edit_msg_id=call.message.message_id,
     )
-    await safe_edit(
+    new_id = await safe_edit(
         call, f"✏️ <b>«{label}»</b> — введи новое значение:",
         InlineKeyboardMarkup(inline_keyboard=[[_close_btn(callback_data.shop_id, callback_data.page)]]),
     )
+    await state.update_data(edit_chat_id=call.message.chat.id, edit_msg_id=new_id)
     await call.answer()
 
 
@@ -351,13 +328,12 @@ async def cb_anchor_input_start(call: CallbackQuery, callback_data: ShopCb, stat
         shop_id=callback_data.shop_id,
         field="anchor",
         page=callback_data.page,
-        edit_chat_id=call.message.chat.id,
-        edit_msg_id=call.message.message_id,
     )
-    await safe_edit(
+    new_id = await safe_edit(
         call, "📅 Введи дату завоза в формате <b>YYYY-MM-DD</b> (например 2026-09-15):",
         InlineKeyboardMarkup(inline_keyboard=[[_close_btn(callback_data.shop_id, callback_data.page)]]),
     )
+    await state.update_data(edit_chat_id=call.message.chat.id, edit_msg_id=new_id)
     await call.answer()
 
 
@@ -481,8 +457,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     async def err(text: str) -> None:
         # введённое сообщение сразу убираем — в чате остаётся только меню с ошибкой
         await _safe_delete(message)
-        if not await _edit_or_send(message.bot, chat_id, msg_id, text, kb):
-            await message.answer(text)
+        await render(message.bot, chat_id, msg_id, text, kb)
 
     if not await can_access_shop(message.from_user.id, shop_id):
         await state.clear()
@@ -550,13 +525,11 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     card_kb = _card_kb(shop_id, page, shop.is_active, is_super)
     # убираем введённый текст из чата — остаётся только обновлённое меню
     await _safe_delete(message)
-    if not await _edit_or_send(
+    await render(
         message.bot, chat_id, msg_id,
         f"✅ «{label}» обновлено.\n\n{_format_card(shop, subs)}",
         card_kb,
-    ):
-        await message.answer(f"✅ «{label}» обновлено.")
-        await message.answer(_format_card(shop, subs), reply_markup=card_kb)
+    )
 
 
 # ---------- ACTIVATE / DEACTIVATE ----------

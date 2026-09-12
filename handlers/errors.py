@@ -94,6 +94,8 @@ async def on_error(event: ErrorEvent, bot: Bot) -> None:
         f"<pre>{html.escape(tb_tail)}</pre>"
     )
     try:
-        await bot.send_message(settings.ADMIN_CHAT_ID, text)
+        msg = await bot.send_message(settings.ADMIN_CHAT_ID, text)
+        from services.chat_journal import journal
+        journal.record(settings.ADMIN_CHAT_ID, msg.message_id)
     except Exception:
         log.exception("failed to forward error to admin chat")

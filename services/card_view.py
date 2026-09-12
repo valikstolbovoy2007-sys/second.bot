@@ -24,6 +24,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto
 from data.repos.shop_photos import list_photos
 from data.repos.shops import Shop
 from services.card_render import format_shop_card
+from services.chat_journal import journal
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,25 @@ async def _delete(call: CallbackQuery) -> None:
         pass
 
 
+async def _resend_photo(msg, photo_id: str, body: str, kb: InlineKeyboardMarkup) -> None:
+    sent = await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
+    journal.record(msg.chat.id, sent.message_id)
+
+
+async def _resend_text(msg, body: str, kb: InlineKeyboardMarkup) -> None:
+    sent = await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
+    journal.record(msg.chat.id, sent.message_id)
+
+
+async def _requires_teleport(call: CallbackQuery) -> bool:
+    return journal.has_newer(call.message.chat.id, call.message.message_id)
+
+
+async def _teleport(call: CallbackQuery) -> None:
+    await _delete(call)
+    journal.drop_below(call.message.chat.id, call.message.message_id)
+
+
 async def show_shop_card(
     call: CallbackQuery,
     shop: Shop,
@@ -55,6 +75,16 @@ async def show_shop_card(
     photo_id = await _resolve_photo_id(shop) if len(body) <= CAPTION_LIMIT else None
     msg = call.message
     was_photo = bool(msg.photo)
+
+    if _requires_teleport(call):
+        # Внизу появились свежие сообщения бота (уведомление и т.п.) —
+        # карточка «телепортируется» в конец чата, под них.
+        await _teleport(call)
+        if photo_id:
+            await _resend_photo(msg, photo_id, body, kb)
+        else:
+            await _resend_text(msg, body, kb)
+        return
 
     if photo_id:
         if was_photo:
@@ -75,13 +105,13 @@ async def show_shop_card(
                 # fall through: delete and resend
                 log.debug("edit_media failed (%s), resending", exc)
         await _delete(call)
-        await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
+        await _resend_photo(msg, photo_id, body, kb)
         return
 
     # No photo path
     if was_photo:
         await _delete(call)
-        await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
+        await _resend_text(msg, body, kb)
         return
     try:
         await msg.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
@@ -97,9 +127,13 @@ async def show_text_view(
 ) -> None:
     """Render a plain-text screen, correctly handling a previous photo card."""
     msg = call.message
+    if _requires_teleport(call):
+        await _teleport(call)
+        await _resend_text(msg, text, kb)
+        return
     if msg.photo:
         await _delete(call)
-        await msg.answer(text, reply_markup=kb, disable_web_page_preview=True)
+        await _resend_text(msg, text, kb)
         return
     try:
         await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)

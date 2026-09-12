@@ -12,6 +12,7 @@ from data.repos.notifier_repo import (
     mark_blocked,
     mark_sent,
 )
+from services.chat_journal import journal
 from services.cycle import EventType, days_until, humanize_days, resolve_cycle_info
 
 log = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ async def _send_and_mark(
     if tg_id is None:
         return
     try:
-        await bot.send_message(tg_id, text)
+        msg = await bot.send_message(tg_id, text)
     except TelegramForbiddenError:
         log.warning("user %s blocked the bot", tg_id)
         await mark_blocked(user_id)
@@ -122,6 +123,7 @@ async def _send_and_mark(
         log.exception("send failed for user_id=%s", user_id)
         return
 
+    journal.record(tg_id, msg.message_id)
     await mark_sent(user_id, [(t.shop_id, t.event_type) for t in triggers], today)
 
 

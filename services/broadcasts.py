@@ -20,6 +20,7 @@ from aiogram.exceptions import (
 )
 
 from data.db import pool
+from services.chat_journal import journal
 
 log = logging.getLogger(__name__)
 
@@ -243,11 +244,12 @@ async def _send_payload(bot: Bot, tg_id: int, payload: dict) -> None:
     photo = payload.get("photo")
     document = payload.get("document")
     if photo:
-        await bot.send_photo(tg_id, photo, caption=text or None)
+        msg = await bot.send_photo(tg_id, photo, caption=text or None)
     elif document:
-        await bot.send_document(tg_id, document, caption=text or None)
+        msg = await bot.send_document(tg_id, document, caption=text or None)
     else:
-        await bot.send_message(tg_id, text)
+        msg = await bot.send_message(tg_id, text)
+    journal.record(tg_id, msg.message_id)
 
 
 async def _is_cancelled_or_paused(bc_id: int) -> str:

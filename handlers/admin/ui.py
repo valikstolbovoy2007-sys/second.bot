@@ -1,14 +1,14 @@
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
+
+from services.chat_render import render
 
 
 async def safe_edit(
     call: CallbackQuery,
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
-) -> None:
-    try:
-        await call.message.edit_text(text, reply_markup=reply_markup)
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
+) -> int:
+    """Teleport-aware перерисовка меню. Возвращает актуальный message_id."""
+    return await render(
+        call.bot, call.message.chat.id, call.message.message_id, text, reply_markup,
+    )
