@@ -143,6 +143,11 @@ DEFAULTS: dict[str, str] = {
 
     # settings
     "settings.title":              "⚙️ <b>Настройки</b>",
+    "settings.notify_title": (
+        "🔔 <b>Настройка уведомлений</b>\n"
+        "\n"
+        "Отметь, о чём напоминать по отслеживаемым магазинам."
+    ),
     "settings.pause_active":       "⏸ На паузе до <b>{date}</b>",
     "settings.pause_off":          "🔔 Уведомления активны",
     "settings.pause_picker": (
@@ -205,6 +210,7 @@ DESCRIPTIONS: dict[str, str] = {
     "myshops.sub_all_already": "Тост если пользователь уже подписан на всё",
 
     "settings.title":            "Заголовок экрана настроек",
+    "settings.notify_title":     "Заголовок подменю «Настройка уведомлений»",
     "settings.notify_time":      "Строка с текущим временем уведомлений",
     "settings.pause_active":     "Строка когда активна пауза",
     "settings.pause_off":        "Строка когда уведомления включены",
@@ -246,7 +252,7 @@ GROUPS: list[tuple[str, str, list[str]]] = [
         "myshops.sub_all_done", "myshops.sub_all_already",
     ]),
     ("settings","Настройки", [
-        "settings.title", "settings.notify_time",
+        "settings.title", "settings.notify_title", "settings.notify_time",
         "settings.pause_active", "settings.pause_off",
         "settings.time_picker", "settings.time_saved",
         "settings.pause_picker", "settings.pause_off_done", "settings.pause_set_done",
