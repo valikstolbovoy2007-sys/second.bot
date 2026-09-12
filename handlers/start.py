@@ -1,6 +1,7 @@
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
@@ -41,13 +42,16 @@ async def cb_help(call: CallbackQuery) -> None:
 @router.callback_query(F.data.in_({"menu", "menu:open"}))
 async def cb_menu(call: CallbackQuery) -> None:
     admin = await is_admin(call.from_user.id)
+    text = await t("start.welcome")
+    kb = await main_menu(is_admin=admin)
 
-    await call.message.delete()
-
-    await call.bot.send_message(
-        chat_id=call.from_user.id,
-        text=await t("start.welcome"),
-        reply_markup=await main_menu(is_admin=admin),
-    )
-
+    if call.message.photo:
+        # Фото-сообщение (карточка) нельзя превратить в текстовое меню на месте.
+        try:
+            await call.message.delete()
+        except TelegramBadRequest:
+            pass
+        await call.bot.send_message(chat_id=call.from_user.id, text=text, reply_markup=kb)
+    else:
+        await render(call.bot, call.message.chat.id, call.message.message_id, text, kb)
     await call.answer()

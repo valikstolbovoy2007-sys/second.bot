@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from data.repos.shops import Shop, get_shop, list_active_shops
 from data.repos.subs import is_subscribed, subscribed_shop_ids
@@ -24,9 +24,10 @@ from keyboards.catalog_kb import (
     sort_kb,
 )
 from services.card_render import format_price_schedule, phase_marker
-from services.card_view import show_shop_card, show_text_view
+from services.card_view import send_shop_card, show_shop_card, show_text_view
 from services.chat_render import render
 from services.maps import yandex_maps_url
+from services.workspace import ws
 from services.catalog import (
     FLT_ALL,
     SORT_NAME,
@@ -78,17 +79,13 @@ async def _build_header(
     return "\n".join(parts)
 
 
-async def _render_catalog(
-    call: CallbackQuery,
-    *,
-    page: int,
-    flt: str,
-    sort: str,
-) -> None:
-    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+async def _catalog_payload(
+    user_id: int, *, page: int, flt: str, sort: str,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """(текст, клавиатура) экрана списка каталога (включая пустой случай)."""
     flt = _norm_flt(flt)
     sort = _norm_sort(sort)
-    search = _user_search.get(call.from_user.id, "")
+    search = _user_search.get(user_id, "")
     today = date.today()
 
     all_shops = await list_active_shops()
@@ -104,9 +101,7 @@ async def _render_catalog(
         body = await t(
             "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
         )
-        await show_text_view(call, body, empty_filter_kb(flt, has_search=bool(search)))
-        await call.answer()
-        return
+        return body, empty_filter_kb(flt, has_search=bool(search))
 
     last_page = max(0, (total - 1) // PAGE_SIZE)
     page = max(0, min(page, last_page))
@@ -120,7 +115,40 @@ async def _render_catalog(
         phase_markers=markers,
         tracked_ids=sub_ids,
     )
-    await show_text_view(call, body, kb)
+    return body, kb
+
+
+async def _render_catalog(
+    call: CallbackQuery,
+    *,
+    page: int,
+    flt: str,
+    sort: str,
+) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
+    new_id = await show_text_view(call, body, kb)
+    ws.set_home(user_id, call.message.chat.id, new_id)
+    await call.answer()
+
+
+async def _close_card_back_to_catalog(
+    call: CallbackQuery, user_id: int, *, page: int, flt: str, sort: str,
+) -> None:
+    """Закрыть карточку и перерисовать список на месте (не удаляя его)."""
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+    ws.close_card(user_id)
+    home = ws.home(user_id)
+    if home:
+        chat_id, home_id = home
+        body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
+        new_id = await render(call.bot, chat_id, home_id, body, kb)
+        ws.set_home(user_id, chat_id, new_id)
+    else:
+        await _render_catalog(call, page=page, flt=flt, sort=sort)
     await call.answer()
 
 
@@ -134,6 +162,14 @@ async def cb_open(call: CallbackQuery) -> None:
 
 @router.callback_query(CatalogCb.filter(F.action == "list"))
 async def cb_list(call: CallbackQuery, callback_data: CatalogCb) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    if ws.card(user_id) == call.message.message_id:
+        # Пришли «Назад» с открытой карточки — закрываем её, список остаётся.
+        await _close_card_back_to_catalog(
+            call, user_id,
+            page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
+        )
+        return
     await _render_catalog(
         call, page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
     )
@@ -164,7 +200,14 @@ async def cb_shop(call: CallbackQuery, callback_data: CatalogCb) -> None:
         has_prices=has_prices,
         maps_url=yandex_maps_url(shop.address),
     )
-    await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
+    home = ws.home(user_id)
+    pressed_on_list = home is not None and home[1] == call.message.message_id
+    if pressed_on_list:
+        # Режим «панель»: список остаётся, карточка открывается отдельным сообщением.
+        card_id = await send_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
+    else:
+        card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
+    ws.open_card(user_id, card_id)
     await call.answer()
 
 
@@ -177,7 +220,7 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
         return
     tracked = await is_subscribed(user_id, shop.id)
     has_prices = bool(shop.price_start and shop.price_step is not None)
-    await show_text_view(
+    new_id = await show_text_view(
         call,
         format_price_schedule(shop, date.today()),
         shop_card_kb(
@@ -188,6 +231,7 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
             on_schedule=True,
         ),
     )
+    ws.open_card(user_id, new_id)
     await call.answer()
 
 
@@ -282,7 +326,10 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         body = await t(
             "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
         )
-        await message.answer(body, reply_markup=empty_filter_kb(flt, has_search=bool(search)))
+        sent = await message.answer(
+            body, reply_markup=empty_filter_kb(flt, has_search=bool(search))
+        )
+        ws.set_home(message.from_user.id, message.chat.id, sent.message_id)
         return
     page = 0
     page_shops = filtered[: PAGE_SIZE]
@@ -294,7 +341,8 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         phase_markers=markers,
         tracked_ids=sub_ids,
     )
-    await message.answer(body, reply_markup=kb)
+    sent = await message.answer(body, reply_markup=kb)
+    ws.set_home(message.from_user.id, message.chat.id, sent.message_id)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))

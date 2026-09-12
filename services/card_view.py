@@ -52,6 +52,25 @@ async def _resend_text(msg, body: str, kb: InlineKeyboardMarkup) -> None:
     return await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
 
 
+async def send_shop_card(
+    call: CallbackQuery,
+    shop: Shop,
+    today: date,
+    *,
+    is_tracked: bool,
+    kb: InlineKeyboardMarkup,
+) -> int:
+    """Отправить карточку новым сообщением (режим «панель») и вернуть её id."""
+    body = await format_shop_card(shop, today, is_tracked=is_tracked)
+    photo_id = await _resolve_photo_id(shop) if len(body) <= CAPTION_LIMIT else None
+    msg = call.message
+    if photo_id:
+        sent = await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
+    else:
+        sent = await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
+    return sent.message_id
+
+
 async def _requires_teleport(call: CallbackQuery) -> bool:
     return journal.has_newer(call.message.chat.id, call.message.message_id)
 
@@ -68,7 +87,8 @@ async def show_shop_card(
     *,
     is_tracked: bool,
     kb: InlineKeyboardMarkup,
-) -> None:
+) -> int:
+    """Render a shop card into the pressed message; return where it ended up."""
     body = await format_shop_card(shop, today, is_tracked=is_tracked)
     photo_id = await _resolve_photo_id(shop) if len(body) <= CAPTION_LIMIT else None
     msg = call.message
@@ -83,7 +103,7 @@ async def show_shop_card(
         else:
             sent = await _resend_text(msg, body, kb)
         journal.record(msg.chat.id, sent.message_id)
-        return
+        return sent.message_id
 
     if photo_id:
         if was_photo:
@@ -92,7 +112,7 @@ async def show_shop_card(
                     InputMediaPhoto(media=photo_id, caption=body),
                     reply_markup=kb,
                 )
-                return
+                return msg.message_id
             except TelegramBadRequest as exc:
                 if "message is not modified" in str(exc):
                     # caption + media + kb identical — also try a kb-only edit
@@ -100,43 +120,45 @@ async def show_shop_card(
                         await msg.edit_reply_markup(reply_markup=kb)
                     except TelegramBadRequest:
                         pass
-                    return
+                    return msg.message_id
                 # fall through: delete and resend
                 log.debug("edit_media failed (%s), resending", exc)
         await _delete(call)
-        await _resend_photo(msg, photo_id, body, kb)
-        return
+        sent = await _resend_photo(msg, photo_id, body, kb)
+        return sent.message_id
 
     # No photo path
     if was_photo:
         await _delete(call)
-        await _resend_text(msg, body, kb)
-        return
+        sent = await _resend_text(msg, body, kb)
+        return sent.message_id
     try:
         await msg.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             raise
+    return msg.message_id
 
 
 async def show_text_view(
     call: CallbackQuery,
     text: str,
     kb: InlineKeyboardMarkup,
-) -> None:
-    """Render a plain-text screen, correctly handling a previous photo card."""
+) -> int:
+    """Render a plain-text screen; return the message id it now lives in."""
     msg = call.message
     if await _requires_teleport(call):
         await _teleport(call)
         sent = await _resend_text(msg, text, kb)
         journal.record(msg.chat.id, sent.message_id)
-        return
+        return sent.message_id
     if msg.photo:
         await _delete(call)
-        await _resend_text(msg, text, kb)
-        return
+        sent = await _resend_text(msg, text, kb)
+        return sent.message_id
     try:
         await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             raise
+    return msg.message_id
