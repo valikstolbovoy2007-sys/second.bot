@@ -24,7 +24,7 @@ from keyboards.catalog_kb import (
     sort_kb,
 )
 from services.card_render import format_price_schedule, phase_marker
-from services.card_view import send_shop_card, show_shop_card, show_text_view
+from services.card_view import show_shop_card, show_text_view
 from services.chat_render import render
 from services.maps import yandex_maps_url
 from services.workspace import ws
@@ -127,28 +127,24 @@ async def _render_catalog(
 ) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
-    new_id = await show_text_view(call, body, kb)
-    ws.set_home(user_id, call.message.chat.id, new_id)
+    await show_text_view(call, body, kb)
     await call.answer()
 
 
 async def _close_card_back_to_catalog(
     call: CallbackQuery, user_id: int, *, page: int, flt: str, sort: str,
 ) -> None:
-    """Закрыть карточку и перерисовать список на месте (не удаляя его)."""
+    """«Назад» с карточки: карточка удаляется, список снова появляется на месте."""
     try:
         await call.message.delete()
     except TelegramBadRequest:
         pass
     ws.close_card(user_id)
-    home = ws.home(user_id)
-    if home:
-        chat_id, home_id = home
-        body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
-        new_id = await render(call.bot, chat_id, home_id, body, kb)
-        ws.set_home(user_id, chat_id, new_id)
-    else:
-        await _render_catalog(call, page=page, flt=flt, sort=sort)
+    body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
+    await call.bot.send_message(
+        call.message.chat.id, body,
+        reply_markup=kb, disable_web_page_preview=True,
+    )
     await call.answer()
 
 
@@ -200,13 +196,9 @@ async def cb_shop(call: CallbackQuery, callback_data: CatalogCb) -> None:
         has_prices=has_prices,
         maps_url=yandex_maps_url(shop.address),
     )
-    home = ws.home(user_id)
-    pressed_on_list = home is not None and home[1] == call.message.message_id
-    if pressed_on_list:
-        # Режим «панель»: список остаётся, карточка открывается отдельным сообщением.
-        card_id = await send_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
-    else:
-        card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
+    # Список «превращается» в карточку на том же сообщении (delete+send
+    # для text->photo — Telegram не умеет морфить это на месте).
+    card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
     ws.open_card(user_id, card_id)
     await call.answer()
 
@@ -326,10 +318,9 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         body = await t(
             "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
         )
-        sent = await message.answer(
+        await message.answer(
             body, reply_markup=empty_filter_kb(flt, has_search=bool(search))
         )
-        ws.set_home(message.from_user.id, message.chat.id, sent.message_id)
         return
     page = 0
     page_shops = filtered[: PAGE_SIZE]
@@ -341,8 +332,7 @@ async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
         phase_markers=markers,
         tracked_ids=sub_ids,
     )
-    sent = await message.answer(body, reply_markup=kb)
-    ws.set_home(message.from_user.id, message.chat.id, sent.message_id)
+    await message.answer(body, reply_markup=kb)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))

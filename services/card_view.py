@@ -52,25 +52,6 @@ async def _resend_text(msg, body: str, kb: InlineKeyboardMarkup) -> None:
     return await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
 
 
-async def send_shop_card(
-    call: CallbackQuery,
-    shop: Shop,
-    today: date,
-    *,
-    is_tracked: bool,
-    kb: InlineKeyboardMarkup,
-) -> int:
-    """Отправить карточку новым сообщением (режим «панель») и вернуть её id."""
-    body = await format_shop_card(shop, today, is_tracked=is_tracked)
-    photo_id = await _resolve_photo_id(shop) if len(body) <= CAPTION_LIMIT else None
-    msg = call.message
-    if photo_id:
-        sent = await msg.answer_photo(photo_id, caption=body, reply_markup=kb)
-    else:
-        sent = await msg.answer(body, reply_markup=kb, disable_web_page_preview=True)
-    return sent.message_id
-
-
 async def _requires_teleport(call: CallbackQuery) -> bool:
     return journal.has_newer(call.message.chat.id, call.message.message_id)
 

@@ -19,8 +19,7 @@ from data.repos.users import upsert_user
 from keyboards.catalog_kb import TrackCb, shop_card_kb
 from keyboards.my_shops_kb import PAGE_SIZE, MyShopsCb, confirm_unsub_all_kb, my_shops_kb
 from services.card_render import today_marker
-from services.card_view import send_shop_card, show_shop_card, show_text_view
-from services.chat_render import render
+from services.card_view import show_shop_card, show_text_view
 from services.maps import yandex_maps_url
 from services.texts import t
 from services.workspace import ws
@@ -49,28 +48,21 @@ async def _myshops_payload(user_id: int, *, page: int) -> tuple[str, InlineKeybo
 async def _render_list(call: CallbackQuery, page: int) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     body, kb = await _myshops_payload(user_id, page=page)
-    new_id = await show_text_view(call, body, kb)
-    ws.set_home(user_id, call.message.chat.id, new_id)
+    await show_text_view(call, body, kb)
     await call.answer()
 
 
 async def _close_card_back_to_list(
     call: CallbackQuery, user_id: int, *, page: int,
 ) -> None:
-    """Закрыть карточку и перерисовать список на месте (не удаляя его)."""
+    """«Назад» с карточки: карточка удаляется, список снова появляется на месте."""
     try:
         await call.message.delete()
     except TelegramBadRequest:
         pass
     ws.close_card(user_id)
-    home = ws.home(user_id)
-    if home:
-        chat_id, home_id = home
-        body, kb = await _myshops_payload(user_id, page=page)
-        new_id = await render(call.bot, chat_id, home_id, body, kb)
-        ws.set_home(user_id, chat_id, new_id)
-    else:
-        await _render_list(call, page=page)
+    body, kb = await _myshops_payload(user_id, page=page)
+    await call.bot.send_message(call.message.chat.id, body, reply_markup=kb)
     await call.answer()
 
 
@@ -102,12 +94,8 @@ async def cb_shop(call: CallbackQuery, callback_data: MyShopsCb) -> None:
         has_prices=has_prices,
         maps_url=yandex_maps_url(shop.address),
     )
-    home = ws.home(user_id)
-    pressed_on_list = home is not None and home[1] == call.message.message_id
-    if pressed_on_list:
-        card_id = await send_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
-    else:
-        card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
+    # Список «превращается» в карточку на том же сообщении.
+    card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
     ws.open_card(user_id, card_id)
     await call.answer()
 

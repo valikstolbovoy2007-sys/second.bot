@@ -1,22 +1,16 @@
-"""Per-user "workspace" tracking for smooth catalog navigation.
+"""Per-user tracking of the currently open shop card.
 
-Список магазинов живёт в своём сообщении и никогда не удаляется:
-при открытии карточки она отправляется отдельным сообщением (режим
-«панель»), а «Назад» просто закрывает карточку и перерисовывает список
-на месте. Так у потребителя не мелькает «удаление всего меню».
+Список магазинов и карточка занимают одно сообщение («превращение»):
+нажатие на сешку удаляет список и шлёт фото-карточку на его место,
+«Назад» в свою очередь удаляет карточку и возвращает список.
+Отсюда запоминаем, какое текущее сообщение — карточка, чтобы
+отличить «Назад с карточки» от обычной пагинации по списку.
 """
 
 
 class Workspace:
     def __init__(self) -> None:
-        self._home: dict[int, tuple[int, int]] = {}
         self._card: dict[int, int] = {}
-
-    def set_home(self, user_id: int, chat_id: int, message_id: int) -> None:
-        self._home[user_id] = (chat_id, message_id)
-
-    def home(self, user_id: int) -> tuple[int, int] | None:
-        return self._home.get(user_id)
 
     def open_card(self, user_id: int, message_id: int) -> None:
         self._card[user_id] = message_id
