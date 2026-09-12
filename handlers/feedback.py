@@ -1,8 +1,10 @@
 import html
 import logging
+from datetime import date
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
+from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -14,13 +16,39 @@ from aiogram.types import (
 from config import settings
 from data.repos.feedback_repo import save_feedback
 from data.repos.shops import get_shop
-from data.repos.subs import list_subscribed
+from data.repos.subs import is_subscribed, list_subscribed
 from data.repos.users import upsert_user
-from keyboards.catalog_kb import CatalogCb
+from keyboards.catalog_kb import CatalogCb, shop_card_kb
+from services.catalog import FLT_ALL, SORT_NAME
+from services.card_view import show_shop_card
+from services.maps import yandex_maps_url
 from states.feedback_states import FeedbackStates
 
 log = logging.getLogger(__name__)
 router = Router(name="feedback")
+
+
+class FeedbackBackCb(CallbackData, prefix="fbk"):
+    """Возврат к карточке магазина из флоу «Исправить неточность»."""
+    shop_id: int
+    src: str = "cat"
+    page: int = 0
+    flt: str = FLT_ALL
+    sort: str = SORT_NAME
+
+
+def _report_back_kb(
+    shop_id: int, src: str, page: int, flt: str, sort: str,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="◀️ Назад к сешке",
+            callback_data=FeedbackBackCb(
+                shop_id=shop_id, src=src, page=page, flt=flt, sort=sort,
+            ).pack(),
+        )],
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="fb:cancel")],
+    ])
 
 
 def _no_kb() -> InlineKeyboardMarkup:
@@ -117,8 +145,36 @@ async def cb_report_shop(call: CallbackQuery, callback_data: CatalogCb, state: F
         "\n"
         "Опиши, что не так — текстом или фото (можно с подписью).\n"
         "\n"
-        "<i>Отменить — /cancel</i>"
+        "<i>Отменить — /cancel</i>",
+        reply_markup=_report_back_kb(
+            shop.id, callback_data.src,
+            callback_data.page, callback_data.flt, callback_data.sort,
+        ),
     )
+    await call.answer()
+
+
+@router.callback_query(FeedbackBackCb.filter())
+async def cb_report_back(call: CallbackQuery, callback_data: FeedbackBackCb, state: FSMContext) -> None:
+    """Кнопка «Назад к сешке» из флоу «Исправить неточность» —
+    закрывает фидбек и возвращает на карточку магазина."""
+    shop = await get_shop(callback_data.shop_id)
+    if not shop:
+        await call.answer("⚠️ Магазин не найден", show_alert=True)
+        return
+    await state.clear()
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    tracked = await is_subscribed(user_id, shop.id)
+    has_prices = bool(shop.price_start and shop.price_step is not None)
+    kb = shop_card_kb(
+        shop.id, tracked, src=callback_data.src,
+        page=callback_data.page,
+        flt=callback_data.flt,
+        sort=callback_data.sort,
+        has_prices=has_prices,
+        maps_url=yandex_maps_url(shop.address),
+    )
+    await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
     await call.answer()
 
 
