@@ -98,7 +98,8 @@ async def cb_photos(call: CallbackQuery, callback_data: ShopXCb) -> None:
         return
     rows: list[list[InlineKeyboardButton]] = []
     if photos:
-        # send the gallery as a media group, then return navigation
+        # галерея уходит отдельными сообщениями, а панель управления
+        # перерисовывается на месте сообщения карточки
         media = [InputMediaPhoto(media=p["file_id"]) for p in photos[:10]]
         try:
             await call.message.answer_media_group(media)
@@ -109,8 +110,9 @@ async def cb_photos(call: CallbackQuery, callback_data: ShopXCb) -> None:
                 text=f"🗑 #{p['id']}",
                 callback_data=ShopXCb(action="delphoto", shop_id=callback_data.shop_id, photo_id=p["id"]).pack(),
             )])
-    else:
-        await call.message.answer("Фотографий нет.")
+    body = f"📷 <b>Фото магазина</b> «{html.escape(shop.name)}» — {len(photos)} шт."
+    if not photos:
+        body += "\n\nФотографий нет — можешь загрузить."
     rows.append([InlineKeyboardButton(
         text="📷 Загрузить фото",
         callback_data=ShopXCb(action="addphoto", shop_id=callback_data.shop_id).pack(),
@@ -119,10 +121,7 @@ async def cb_photos(call: CallbackQuery, callback_data: ShopXCb) -> None:
         text="← К карточке",
         callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=0).pack(),
     )])
-    await call.message.answer(
-        f"📷 <b>Фото магазина</b> «{html.escape(shop.name)}» — {len(photos)} шт.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    await safe_edit(call, body, InlineKeyboardMarkup(inline_keyboard=rows))
     await call.answer()
 
 

@@ -2,7 +2,8 @@ import html
 import logging
 from datetime import date, datetime
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -254,6 +255,36 @@ async def cb_card(call: CallbackQuery, callback_data: ShopCb) -> None:
 
 # ---------- EDIT ----------
 
+def _close_btn(shop_id: int, page: int) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text="✖️ Отмена",
+        callback_data=ShopCb(action="cancel_edit", shop_id=shop_id, page=page).pack(),
+    )
+
+
+async def _edit_or_send(
+    bot: Bot,
+    chat_id: int,
+    message_id: int | None,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    """Перерисовываем окно на месте; если сообщение уже удалено — False (= прислать новым)."""
+    if message_id is None:
+        return False
+    try:
+        await bot.edit_message_text(
+            text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup
+        )
+        return True
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return True
+        if "message to edit not found" in str(e):
+            return False
+        raise
+
+
 @router.callback_query(ShopCb.filter(F.action == "edit"))
 async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMContext) -> None:
     if not await can_access_shop(call.from_user.id, callback_data.shop_id):
@@ -263,7 +294,6 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
     if callback_data.field not in FIELDS:
         await call.answer("Это поле редактируется супер-админом", show_alert=True)
         return
-    label, _ = FIELDS[callback_data.field]
     if callback_data.field == "anchor":
         rows = [
             [InlineKeyboardButton(
@@ -278,28 +308,27 @@ async def cb_edit_start(call: CallbackQuery, callback_data: ShopCb, state: FSMCo
                     action="anchor_days", shop_id=callback_data.shop_id, page=callback_data.page,
                 ).pack(),
             )],
-            [InlineKeyboardButton(
-                text="✖️ Отмена",
-                callback_data=ShopCb(action="cancel_edit").pack(),
-            )],
+            [_close_btn(callback_data.shop_id, callback_data.page)],
         ]
-        await call.message.answer(
-            "✏️ <b>Anchor</b> — как задать точку отсчёта?",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        await safe_edit(
+            call, "✏️ <b>Anchor</b> — как задать точку отсчёта?",
+            InlineKeyboardMarkup(inline_keyboard=rows),
         )
         await call.answer()
         return
+    label, _ = FIELDS[callback_data.field]
     await state.set_state(EditStates.value)
     await state.update_data(
-        shop_id=callback_data.shop_id, field=callback_data.field, page=callback_data.page
+        shop_id=callback_data.shop_id,
+        field=callback_data.field,
+        page=callback_data.page,
+        edit_chat_id=call.message.chat.id,
+        edit_msg_id=call.message.message_id,
     )
-    rows = []
-    rows.append([InlineKeyboardButton(
-        text="✖️ Отмена",
-        callback_data=ShopCb(action="card", shop_id=callback_data.shop_id, page=callback_data.page).pack(),
-    )])
-    prompt = f"Введи новое значение поля «{label}»:"
-    await call.message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await safe_edit(
+        call, f"✏️ <b>«{label}»</b> — введи новое значение:",
+        InlineKeyboardMarkup(inline_keyboard=[[_close_btn(callback_data.shop_id, callback_data.page)]]),
+    )
     await call.answer()
 
 
@@ -311,10 +340,15 @@ async def cb_anchor_input_start(call: CallbackQuery, callback_data: ShopCb, stat
         return
     await state.set_state(EditStates.value)
     await state.update_data(
-        shop_id=callback_data.shop_id, field="anchor", page=callback_data.page,
+        shop_id=callback_data.shop_id,
+        field="anchor",
+        page=callback_data.page,
+        edit_chat_id=call.message.chat.id,
+        edit_msg_id=call.message.message_id,
     )
-    await call.message.answer(
-        "📅 Введи дату завоза в формате <b>YYYY-MM-DD</b> (например 2026-09-15):"
+    await safe_edit(
+        call, "📅 Введи дату завоза в формате <b>YYYY-MM-DD</b> (например 2026-09-15):",
+        InlineKeyboardMarkup(inline_keyboard=[[_close_btn(callback_data.shop_id, callback_data.page)]]),
     )
     await call.answer()
 
@@ -337,22 +371,18 @@ async def cb_anchor_days(call: CallbackQuery, callback_data: ShopCb) -> None:
             for j, wd in enumerate(_WEEKDAY_RU[i:i + 2])
         ]
         rows.append(row)
-    rows.append([InlineKeyboardButton(
-        text="✖️ Отмена",
-        callback_data=ShopCb(action="cancel_edit").pack(),
-    )])
-    await call.message.answer(
-        "🗓 Выбери день недели месяца (дальше уточнишь, какая по счёту неделя):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    rows.append([_close_btn(callback_data.shop_id, callback_data.page)])
+    await safe_edit(
+        call, "🗓 Выбери день недели месяца (дальше уточнишь, какая по счёту неделя):",
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await call.answer()
 
 
 @router.callback_query(ShopCb.filter(F.action == "cancel_edit"))
-async def cb_cancel_edit(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_cancel_edit(call: CallbackQuery, callback_data: ShopCb, state: FSMContext) -> None:
     await state.clear()
-    await call.message.delete()
-    await call.answer()
+    await _show_card(call, callback_data.shop_id, callback_data.page)
 
 
 @router.callback_query(AnchorWdCb.filter())
@@ -371,13 +401,10 @@ async def cb_anchor_pick_weekday(call: CallbackQuery, callback_data: AnchorWdCb)
         )]
         for occ, label in _OCCURRENCE_LABELS
     ]
-    rows.append([InlineKeyboardButton(
-        text="✖️ Отмена",
-        callback_data=ShopCb(action="cancel_edit").pack(),
-    )])
-    await call.message.answer(
-        f"Какая по счёту {_WEEKDAY_RU[callback_data.wd]} месяца?",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    rows.append([_close_btn(callback_data.shop_id, callback_data.page)])
+    await safe_edit(
+        call, f"Какая по счёту {_WEEKDAY_RU[callback_data.wd]} месяца?",
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await call.answer()
 
@@ -419,17 +446,16 @@ async def cb_anchor_pick_occurrence(call: CallbackQuery, callback_data: AnchorOc
         None, None, callback_data.wd, today, monthly_occurrence=callback_data.occurrence,
     )
     upcoming = next_event_date(today, info, EventType.ARRIVAL)
-    await call.message.answer(
-        f"✅ Anchor изменён: завоз в {_OCCURRENCE_RU[callback_data.occurrence]} "
-        f"{_WEEKDAY_RU[callback_data.wd]} каждого месяца "
-        f"(ближайший — {upcoming.strftime('%d.%m.%Y')})"
-    )
     shop = await get_shop(callback_data.shop_id)
     subs = await shop_subscribers_count(callback_data.shop_id)
     is_super = await is_super_admin(call.from_user.id)
-    await call.message.answer(
-        _format_card(shop, subs),
-        reply_markup=_card_kb(callback_data.shop_id, callback_data.page, shop.is_active, is_super),
+    await safe_edit(
+        call,
+        f"✅ Anchor изменён: завоз в {_OCCURRENCE_RU[callback_data.occurrence]} "
+        f"{_WEEKDAY_RU[callback_data.wd]} каждого месяца "
+        f"(ближайший — {upcoming.strftime('%d.%m.%Y')})\n\n"
+        + _format_card(shop, subs),
+        _card_kb(callback_data.shop_id, callback_data.page, shop.is_active, is_super),
     )
     await call.answer()
 
@@ -440,6 +466,14 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     shop_id = data["shop_id"]
     field = data["field"]
     page = data.get("page", 0)
+    chat_id = data.get("edit_chat_id") or message.chat.id
+    msg_id = data.get("edit_msg_id")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[_close_btn(shop_id, page)]])
+
+    async def err(text: str) -> None:
+        if not await _edit_or_send(message.bot, chat_id, msg_id, text, kb):
+            await message.answer(text)
+
     if not await can_access_shop(message.from_user.id, shop_id):
         await state.clear()
         await message.answer("Нет доступа.")
@@ -447,7 +481,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     label, max_len = FIELDS[field]
     if len(raw) > max_len:
-        await message.answer(f"Слишком длинно (макс {max_len}). Введи короче.")
+        await err(f"⚠️ Слишком длинно (макс {max_len}). Введи короче.")
         return
 
     db_field = field
@@ -464,7 +498,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
             if n < 1 or n > 365:
                 raise ValueError
         except ValueError:
-            await message.answer("Цикл — целое число от 1 до 365.")
+            await err("⚠️ Цикл — целое число от 1 до 365.")
             return
         db_field = "cycle_length"
         value = n
@@ -472,7 +506,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         try:
             value = datetime.strptime(raw, "%Y-%m-%d").date()
         except ValueError:
-            await message.answer("Формат даты YYYY-MM-DD.")
+            await err("⚠️ Формат даты YYYY-MM-DD.")
             return
         db_field = "anchor_date"
     elif field in ("price_start", "price_step"):
@@ -481,15 +515,15 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
             if n < 0 or n > 1_000_000:
                 raise ValueError
         except ValueError:
-            await message.answer("Введи целое неотрицательное число.")
+            await err("⚠️ Введи целое неотрицательное число.")
             return
         value = n
 
     shop_before = await get_shop(shop_id)
     ok = await update_shop_field(shop_id, db_field, value)
     if not ok:
-        await message.answer("Не удалось обновить.")
         await state.clear()
+        await err("Не удалось обновить.")
         return
     if field in ("cycle", "anchor") and shop_before and shop_before.monthly_weekday is not None:
         # Manually typing a cycle length/date means "go back to fixed mode" —
@@ -500,12 +534,17 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         {"field": db_field, "before": getattr(shop_before, db_field, None), "after": str(value)},
     )
     await state.clear()
-    await message.answer(f"✅ «{label}» обновлено.")
-    # show card again as a fresh message
     shop = await get_shop(shop_id)
     subs = await shop_subscribers_count(shop_id)
     is_super = await is_super_admin(message.from_user.id)
-    await message.answer(_format_card(shop, subs), reply_markup=_card_kb(shop_id, page, shop.is_active, is_super))
+    card_kb = _card_kb(shop_id, page, shop.is_active, is_super)
+    if not await _edit_or_send(
+        message.bot, chat_id, msg_id,
+        f"✅ «{label}» обновлено.\n\n{_format_card(shop, subs)}",
+        card_kb,
+    ):
+        await message.answer(f"✅ «{label}» обновлено.")
+        await message.answer(_format_card(shop, subs), reply_markup=card_kb)
 
 
 # ---------- ACTIVATE / DEACTIVATE ----------
