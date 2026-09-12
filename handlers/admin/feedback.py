@@ -103,14 +103,14 @@ async def cb_list(call: CallbackQuery, callback_data: FbCb) -> None:
 @router.callback_query(FbCb.filter(F.action == "open"))
 async def cb_open(call: CallbackQuery, callback_data: FbCb) -> None:
     where, args = await _scope_clause(call.from_user.id)
-    cond = where or "WHERE TRUE"
     pl = len(args)
+    cond = f"{where} AND" if where else "WHERE"
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             f"""
             SELECT f.id, f.text, f.status, f.created_at, f.shop_id, u.tg_id AS user_tg, u.username
             FROM feedback f LEFT JOIN users u ON u.id = f.user_id
-            {cond} {'AND' if where else 'WHERE'} f.id = ${pl + 1}
+            {cond} f.id = ${pl + 1}
             """,
             *args, callback_data.fb_id,
         )
