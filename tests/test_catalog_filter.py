@@ -218,3 +218,76 @@ def test_apply_tracked_filter():
         subscribed_ids={2, 3},
     )
     assert [s.name for s in out] == ["B", "C"]
+
+
+# ---------- payload wiring: tg-id vs db-id ----------
+
+
+class _FakeTexts:
+    """Minimal stub for texts.t: returns defaults for keys used by the header."""
+
+    def __init__(self) -> None:
+        self._tpl = {
+            "catalog.title": "🛍 Каталог",
+            "catalog.found": "Найдено: {count}",
+            "catalog.legend": "📌 легенда",
+            "catalog.hint": "<i>подсказка</i>",
+            "catalog.empty": "пусто",
+            "catalog.empty_filter": "ничего не найдено",
+        }
+
+    async def t(self, key: str, **kwargs):
+        tpl = self._tpl.get(key, key)
+        return tpl.format(**kwargs)
+
+
+def test_catalog_payload_search_keyed_by_tg_id(monkeypatch):
+    """Поиск хранится под tg-id юзера и применяется в payload даже если
+    db-id (=users.id из upsert_user) не совпадает с tg-id (регресс: баг,
+    когда keep-alive поиска искался по db-id и всегда возвращал '')."""
+    import asyncio
+
+    import handlers.catalog as cat_mod
+
+    a = _shop(id=1, name="Полтавская", address="Полтавская, 7а")
+    b = _shop(id=2, name="Невский проспект", address="Невский, 100")
+
+    async def fake_list_active_shops():
+        return [a, b]
+
+    async def fake_subscribed_shop_ids(db_user_id):
+        return set()
+
+    fake = _FakeTexts()
+    monkeypatch.setattr(cat_mod, "list_active_shops", fake_list_active_shops)
+    monkeypatch.setattr(cat_mod, "subscribed_shop_ids", fake_subscribed_shop_ids)
+    monkeypatch.setattr(cat_mod, "t", fake.t)
+
+    tg_id, db_id = 777_000_123, 42  # tg-id и db-id гарантированно разные
+    cat_mod._user_search[tg_id] = "полтавская"
+
+    async def run():
+        body, kb = await cat_mod._catalog_payload(
+            db_id, tg_id=tg_id, page=0, flt=FLT_ALL, sort=SORT_NAME,
+        )
+        return body, kb
+
+    body, kb = asyncio.run(run())
+    # Применён поиск: в шапке запрос, из двух магазинов остался один.
+    assert "Результаты по поиску" in body
+    assert "не найдено" not in body
+    assert "Найдено: 1" in body
+    button_texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("Полтавская" in t for t in button_texts)
+    assert not any("Невский" in t for t in button_texts)
+
+    # Без активного поиска (другой tg-id) — полный список.
+    async def run_all():
+        return await cat_mod._catalog_payload(
+            db_id, tg_id=tg_id + 1, page=0, flt=FLT_ALL, sort=SORT_NAME,
+        )
+
+    body2, kb2 = asyncio.run(run_all())
+    assert "Найдено: 2" in body2
+    button2 = [b.text for row in kb2.inline_keyboard for b in row]
+    assert any("Невский" in t for t in button2)

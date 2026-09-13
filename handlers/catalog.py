@@ -83,12 +83,16 @@ async def _build_header(
 
 
 async def _catalog_payload(
-    user_id: int, *, page: int, flt: str, sort: str,
+    user_id: int, tg_id: int, *, page: int, flt: str, sort: str,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """(текст, клавиатура) экрана списка каталога (включая пустой случай)."""
+    """(текст, клавиатура) экрана списка каталога (включая пустой случай).
+
+    user_id — id юзера в БД (для подписок), tg_id — телеграм-id (ключ
+    активного поиска, т.к. поиск хранится в памяти под tg-id).
+    """
     flt = _norm_flt(flt)
     sort = _norm_sort(sort)
-    search = _user_search.get(user_id, "")
+    search = _user_search.get(tg_id, "")
     today = date.today()
 
     all_shops = await list_active_shops()
@@ -129,7 +133,9 @@ async def _render_catalog(
     sort: str,
 ) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
-    body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
+    body, kb = await _catalog_payload(
+        user_id, tg_id=call.from_user.id, page=page, flt=flt, sort=sort,
+    )
     await show_text_view(call, body, kb)
     await call.answer()
 
@@ -139,7 +145,9 @@ async def _close_card_back_to_catalog(
 ) -> None:
     """«Назад» с карточки: список появляется, затем карточка удаляется."""
     ws.close_card(user_id)
-    body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
+    body, kb = await _catalog_payload(
+        user_id, tg_id=call.from_user.id, page=page, flt=flt, sort=sort,
+    )
     sent = await call.bot.send_message(
         call.message.chat.id, body,
         reply_markup=kb, disable_web_page_preview=True,
@@ -326,7 +334,9 @@ async def _render_search_result(
     except TelegramBadRequest:
         pass
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
-    body, kb = await _catalog_payload(user_id, page=0, flt=flt, sort=sort)
+    body, kb = await _catalog_payload(
+        user_id, tg_id=message.from_user.id, page=0, flt=flt, sort=sort,
+    )
     if prompt_msg_id is not None:
         new_id = await render(message.bot, message.chat.id, prompt_msg_id, body, kb)
     else:
