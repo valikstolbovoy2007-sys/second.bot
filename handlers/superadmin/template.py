@@ -25,7 +25,7 @@ from aiogram.types import (
 
 from data.repos.shops import Shop
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.card_blocks import (
     CONFIG_KEY_BLOCKS,
@@ -325,13 +325,20 @@ async def cb_block_edit(call: CallbackQuery, state: FSMContext) -> None:
     if spec is None or not spec.editable:
         await call.answer("Этот блок нельзя редактировать", show_alert=True)
         return
+    await state.clear()
     await state.set_state(TplStates.block_waiting)
     await state.update_data(block_id=block_id)
     vars_hint = (
         ", ".join(f"<code>{{{v}}}</code>" for v in spec.variables)
         if spec.variables else "—"
     )
-    await call.message.answer(
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✖️ Отмена", callback_data=f"sa:tpl:bview:{block_id}"
+        )],
+    ])
+    await render_screen_call(
+        call, state,
         f"✏️ <b>Изменение блока:</b> {spec.title}\n\n"
         "Пришли новый текст блока одним сообщением.\n\n"
         "💡 <b>Подсказки:</b>\n"
@@ -340,15 +347,23 @@ async def cb_block_edit(call: CallbackQuery, state: FSMContext) -> None:
         f"• Доступные подстановки: {vars_hint}\n"
         "• Условные блоки <code>{?…}</code> писать нельзя — используй "
         "обычные <code>{переменная}</code>.\n\n"
-        "Для отмены — /cancel."
+        "Для отмены — /cancel.",
+        cancel_kb,
     )
     await call.answer()
 
 
 @router.message(TplStates.block_waiting, F.text == "/cancel")
 async def msg_block_cancel(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    block_id = data.get("block_id") or ""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✖️ Отмена", callback_data=f"sa:tpl:bview:{block_id}"
+        )],
+    ])
+    await render_screen_msg(message, state, "Отменено. Блок не изменился.", kb)
     await state.clear()
-    await message.answer("Отменено. Блок не изменился.")
 
 
 @router.message(TplStates.block_waiting, F.text)
@@ -356,38 +371,54 @@ async def msg_block_apply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     block_id = data.get("block_id")
     spec = get_spec(block_id) if isinstance(block_id, str) else None
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✖️ Отмена", callback_data=f"sa:tpl:bview:{block_id or ''}"
+        )],
+    ])
     if spec is None or not spec.editable:
+        await render_screen_msg(message, state, "Блок недоступен для редактирования.", cancel_kb)
         await state.clear()
-        await message.answer("Блок недоступен для редактирования.")
         return
 
     raw = message.html_text  # captures Telegram native formatting as HTML
     ok, err = validate_custom_text(raw)
     if not ok:
-        await message.answer(f"❌ Текст блока не принят: {err}\n\nПопробуй ещё раз или /cancel.")
+        await render_screen_msg(
+            message, state,
+            f"❌ Текст блока не принят: {err}\n\nПопробуй ещё раз или /cancel.",
+            cancel_kb,
+            keep_input=True,
+        )
         return
 
     blocks = await _load_blocks()
     if not set_custom_text(blocks, block_id, raw):
+        await render_screen_msg(message, state, "Блок не найден.", cancel_kb)
         await state.clear()
-        await message.answer("Блок не найден.")
         return
 
     # Sanity-check the assembled template renders without exceptions.
     assembled = assemble_blocks(blocks)
     ok_assembled, err_assembled = validate(assembled)
     if not ok_assembled:
-        await message.answer(
+        await render_screen_msg(
+            message, state,
             f"❌ Не удалось применить блок: {err_assembled}\n\n"
-            "Попробуй другой текст или /cancel."
+            "Попробуй другой текст или /cancel.",
+            cancel_kb,
+            keep_input=True,
         )
         return
     try:
         rendered = render(assembled, _sample_ctx())
     except Exception as exc:
-        await message.answer(
+        await render_screen_msg(
+            message, state,
             f"❌ Не удалось отрендерить шаблон: {html.escape(str(exc))}\n\n"
-            "Попробуй другой текст или /cancel."
+            "Попробуй другой текст или /cancel.",
+            cancel_kb,
+            keep_input=True,
         )
         return
 
@@ -396,11 +427,13 @@ async def msg_block_apply(message: Message, state: FSMContext) -> None:
         message.from_user.id, "template.block.edit", "block", block_id,
         payload={"len": len(raw)},
     )
-    await state.clear()
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"✅ Блок «{spec.title}» сохранён.\n\n"
-        f"👁 <b>Так теперь выглядит вся карточка</b> (тестовый магазин):\n\n{rendered}"
+        f"👁 <b>Так теперь выглядит вся карточка</b> (тестовый магазин):\n\n{rendered}",
+        cancel_kb,
     )
+    await state.clear()
 
 
 def _sample_ctx():
@@ -660,8 +693,13 @@ async def cb_raw_preview(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "sa:tpl:raw:edit")
 async def cb_raw_edit(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(TplStates.raw_waiting)
-    await call.message.answer(
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="sa:tpl:raw:view")],
+    ])
+    await render_screen_call(
+        call, state,
         "✏️ <b>Редактирование ручного шаблона</b>\n\n"
         "Пришли новый шаблон одним сообщением.\n\n"
         "💡 <b>Как форматировать:</b>\n"
@@ -673,32 +711,45 @@ async def cb_raw_edit(call: CallbackQuery, state: FSMContext) -> None:
         "• <code>{name}</code>, <code>{address}</code>, <code>{price_today_line}</code> и т.д.\n"
         "• <code>{?chain:текст если сеть указана}</code>\n"
         "• <code>{?!description:текст если описания нет}</code>\n\n"
-        "Список переменных и примеры — в меню. Чтобы отменить — /cancel."
+        "Список переменных и примеры — в меню. Чтобы отменить — /cancel.",
+        cancel_kb,
     )
     await call.answer()
 
 
 @router.message(TplStates.raw_waiting, F.text == "/cancel")
 async def msg_raw_cancel(message: Message, state: FSMContext) -> None:
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="sa:tpl:raw:view")],
+    ])
+    await render_screen_msg(message, state, "Отменено. Ручной шаблон не изменился.", cancel_kb)
     await state.clear()
-    await message.answer("Отменено. Ручной шаблон не изменился.")
 
 
 @router.message(TplStates.raw_waiting, F.text)
 async def msg_raw_apply(message: Message, state: FSMContext) -> None:
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="sa:tpl:raw:view")],
+    ])
     raw = message.html_text
     ok, err = validate(raw)
     if not ok:
-        await message.answer(
-            f"❌ Шаблон не принят: {err}\n\nПопробуй ещё раз или /cancel."
+        await render_screen_msg(
+            message, state,
+            f"❌ Шаблон не принят: {err}\n\nПопробуй ещё раз или /cancel.",
+            cancel_kb,
+            keep_input=True,
         )
         return
     try:
         rendered = render_with_template(_sample_shop(), date.today(), raw, is_tracked=True)
     except Exception as exc:
-        await message.answer(
+        await render_screen_msg(
+            message, state,
             f"❌ Не удалось отрендерить шаблон: {html.escape(str(exc))}\n\n"
-            "Попробуй ещё раз или /cancel."
+            "Попробуй ещё раз или /cancel.",
+            cancel_kb,
+            keep_input=True,
         )
         return
     await cfg_set(
@@ -707,11 +758,13 @@ async def msg_raw_apply(message: Message, state: FSMContext) -> None:
         by=message.from_user.id,
     )
     await audit_write(message.from_user.id, "template.update", "config", CONFIG_KEY)
-    await state.clear()
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"✅ Ручной шаблон сохранён. Он перекрывает блочный режим на рендере.\n\n"
-        f"👁 <b>Так увидит пользователь</b> (тестовый магазин):\n\n{rendered}"
+        f"👁 <b>Так увидит пользователь</b> (тестовый магазин):\n\n{rendered}",
+        cancel_kb,
     )
+    await state.clear()
 
 
 @router.callback_query(F.data == "sa:tpl:raw:reset")

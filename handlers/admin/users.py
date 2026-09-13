@@ -115,6 +115,7 @@ async def cb_list(call: CallbackQuery) -> None:
 
 @router.callback_query(UCb.filter(F.action == "search"))
 async def cb_search(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(USearch.query)
     await render_screen_call(call, state, "Введи tg_id или @username:", _back_kb())
     await call.answer()
@@ -217,6 +218,7 @@ async def cb_dm_start(call: CallbackQuery, callback_data: UCb, state: FSMContext
     if not items:
         await call.answer("Нет доступа", show_alert=True)
         return
+    await state.clear()
     await state.set_state(AdminDmStates.text)
     await state.update_data(target_tg_id=callback_data.tg_id)
     await render_screen_call(

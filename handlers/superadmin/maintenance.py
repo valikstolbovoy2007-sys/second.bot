@@ -13,7 +13,7 @@ from aiogram.types import (
 )
 
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.config_live import get as cfg_get, set_value as cfg_set
 
@@ -112,22 +112,31 @@ async def cb_off(call: CallbackQuery, state: FSMContext) -> None:
     await cb_menu(call, state)
 
 
+def _maint_cancel_kb(back: str = "sa:maint:menu") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data=back)],
+    ])
+
+
 @router.callback_query(F.data == "sa:maint:msg")
 async def cb_msg_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(MaintStates.edit_message)
     cur = await cfg_get(MAINT_MSG_KEY, DEFAULT_MSG)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "Введи новое сообщение для пользователей в режиме обслуживания.\n"
         f"Сейчас: «{html.escape(cur)}»\n"
         "Отмена: /cancel\nСбросить к дефолту: /reset",
+        _maint_cancel_kb(),
     )
     await call.answer()
 
 
 @router.message(MaintStates.edit_message, F.text == "/cancel")
 async def msg_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _maint_cancel_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(MaintStates.edit_message, F.text == "/reset")
@@ -138,15 +147,18 @@ async def msg_reset(message: Message, state: FSMContext) -> None:
         message.from_user.id, "maintenance.message", "config", MAINT_MSG_KEY,
         {"value": DEFAULT_MSG},
     )
+    await render_screen_msg(message, state, "✅ Сообщение сброшено к дефолту.", _maint_cancel_kb())
     await state.clear()
-    await message.answer("✅ Сообщение сброшено к дефолту.")
 
 
 @router.message(MaintStates.edit_message, F.text)
 async def msg_set(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     if not (1 <= len(raw) <= 1000):
-        await message.answer("Длина 1–1000 символов. Повтори.")
+        await render_screen_msg(
+            message, state, "Длина 1–1000 символов. Повтори.", _maint_cancel_kb(),
+            keep_input=True,
+        )
         return
     await cfg_set(MAINT_MSG_KEY, raw, "str",
                   "Maintenance user-facing message", message.from_user.id)
@@ -154,5 +166,5 @@ async def msg_set(message: Message, state: FSMContext) -> None:
         message.from_user.id, "maintenance.message", "config", MAINT_MSG_KEY,
         {"value": raw[:200]},
     )
+    await render_screen_msg(message, state, "✅ Сообщение обновлено.", _maint_cancel_kb())
     await state.clear()
-    await message.answer("✅ Сообщение обновлено.")

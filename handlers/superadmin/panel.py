@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_msg, safe_edit
 
 log = logging.getLogger(__name__)
 router = Router(name="sa_panel")
@@ -41,7 +41,7 @@ TEXT = (
 @router.message(Command("sudo"))
 async def cmd_sudo(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(TEXT, reply_markup=_kb())
+    await render_screen_msg(message, state, TEXT, _kb())
 
 
 @router.callback_query(F.data == "sa:menu")

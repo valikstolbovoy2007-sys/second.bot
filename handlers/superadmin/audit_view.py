@@ -12,7 +12,7 @@ from aiogram.types import (
 )
 
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import distinct_target_types, list_recent
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,19 @@ class AuditStates(StatesGroup):
 
 def _empty_filter() -> dict:
     return {"actor": None, "action": None, "target_type": None, "target_id": None, "days": None}
+
+
+async def _reset_wizard(state: FSMContext) -> None:
+    """Сбросить pointer визарда, сохранив audit_filter в FSM-данных."""
+    data = await state.get_data()
+    data.pop("wizard_msg_id", None)
+    await state.set_data(data)
+
+
+def _filter_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="sa:audit:filters")],
+    ])
 
 
 def _filter_label(f: dict) -> str:
@@ -117,9 +130,12 @@ async def cb_filter_reset(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "sa:audit:f:actor")
 async def cb_filter_actor_start(call: CallbackQuery, state: FSMContext) -> None:
+    await _reset_wizard(state)
     await state.set_state(AuditStates.actor)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "Введи tg_id актора (число), или /clear чтобы очистить, /cancel — отмена:",
+        _filter_cancel_kb(),
     )
     await call.answer()
 
@@ -129,8 +145,8 @@ async def msg_filter_actor(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     f = await _get_filter(state)
     if raw == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _filter_cancel_kb())
         await state.set_state(None)
-        await message.answer("Отменено.")
         return
     if raw == "/clear":
         f["actor"] = None
@@ -138,19 +154,22 @@ async def msg_filter_actor(message: Message, state: FSMContext) -> None:
         try:
             f["actor"] = int(raw.lstrip("@"))
         except ValueError:
-            await message.answer("Это не число. Повтори.")
+            await render_screen_msg(message, state, "Это не число. Повтори.", _filter_cancel_kb())
             return
     await _set_filter(state, f)
     await state.set_state(None)
-    await message.answer(f"✅ Фильтр actor: {f['actor'] or '—'}")
+    await render_screen_msg(message, state, f"✅ Фильтр actor: {f['actor'] or '—'}", _filter_cancel_kb())
 
 
 @router.callback_query(F.data == "sa:audit:f:action")
 async def cb_filter_action_start(call: CallbackQuery, state: FSMContext) -> None:
+    await _reset_wizard(state)
     await state.set_state(AuditStates.action)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "Введи подстроку action (например, 'shop' или 'broadcast'),\n"
         "/clear — очистить, /cancel — отмена:",
+        _filter_cancel_kb(),
     )
     await call.answer()
 
@@ -160,19 +179,19 @@ async def msg_filter_action(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     f = await _get_filter(state)
     if raw == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _filter_cancel_kb())
         await state.set_state(None)
-        await message.answer("Отменено.")
         return
     if raw == "/clear":
         f["action"] = None
     else:
         if len(raw) > 100:
-            await message.answer("До 100 символов.")
+            await render_screen_msg(message, state, "До 100 символов.", _filter_cancel_kb())
             return
         f["action"] = raw
     await _set_filter(state, f)
     await state.set_state(None)
-    await message.answer(f"✅ Фильтр action: «{f['action'] or '—'}»")
+    await render_screen_msg(message, state, f"✅ Фильтр action: «{f['action'] or '—'}»", _filter_cancel_kb())
 
 
 @router.callback_query(F.data == "sa:audit:f:ttype")
@@ -202,8 +221,13 @@ async def cb_filter_ttype_set(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "sa:audit:f:tid")
 async def cb_filter_tid_start(call: CallbackQuery, state: FSMContext) -> None:
+    await _reset_wizard(state)
     await state.set_state(AuditStates.target_id)
-    await call.message.answer("Введи target_id (строкой), /clear — очистить, /cancel — отмена:")
+    await render_screen_call(
+        call, state,
+        "Введи target_id (строкой), /clear — очистить, /cancel — отмена:",
+        _filter_cancel_kb(),
+    )
     await call.answer()
 
 
@@ -212,19 +236,19 @@ async def msg_filter_tid(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     f = await _get_filter(state)
     if raw == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _filter_cancel_kb())
         await state.set_state(None)
-        await message.answer("Отменено.")
         return
     if raw == "/clear":
         f["target_id"] = None
     else:
         if len(raw) > 100:
-            await message.answer("До 100 символов.")
+            await render_screen_msg(message, state, "До 100 символов.", _filter_cancel_kb())
             return
         f["target_id"] = raw
     await _set_filter(state, f)
     await state.set_state(None)
-    await message.answer(f"✅ Фильтр target_id: «{f['target_id'] or '—'}»")
+    await render_screen_msg(message, state, f"✅ Фильтр target_id: «{f['target_id'] or '—'}»", _filter_cancel_kb())
 
 
 @router.callback_query(F.data.startswith("sa:audit:p:"))

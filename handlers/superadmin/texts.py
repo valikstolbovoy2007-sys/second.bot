@@ -8,7 +8,6 @@ the bot reads `message.html_text` and saves the resulting HTML.
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -26,7 +25,7 @@ from data.repos.texts import (
     set_override,
 )
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.texts import (
     DEFAULTS,
@@ -132,6 +131,16 @@ async def _key_card(call: CallbackQuery, key: str) -> None:
         f"{ph_line}\n"
         f"{src_line}"
     )
+    try:
+        preview = render_preview(key, current)
+    except Exception:
+        log.exception("preview render failed for %s", key)
+        preview = "—"
+    info += (
+        "\n\n👁 <b>Как видит пользователь:</b>\n"
+        "─────────────────────\n"
+        f"{preview}"
+    )
     rows = [
         [InlineKeyboardButton(
             text="✏️ Изменить",
@@ -149,15 +158,7 @@ async def _key_card(call: CallbackQuery, key: str) -> None:
         callback_data=TxtCb(action="group", value=gid).pack(),
     )])
 
-    # Send the info as a chat message edit, then send the rendered preview as a fresh msg.
     await safe_edit(call, info, InlineKeyboardMarkup(inline_keyboard=rows))
-    preview = render_preview(key, current)
-    try:
-        await call.message.answer(
-            "👁 <b>Как видит пользователь:</b>\n─────────────────────\n" + preview
-        )
-    except TelegramBadRequest as exc:
-        await call.message.answer(f"⚠️ Не удалось отрендерить превью: {exc!s}")
 
 
 # ---------- entrypoints ----------
@@ -230,9 +231,10 @@ async def cb_edit_start(call: CallbackQuery, callback_data: TxtCb, state: FSMCon
             callback_data=TxtCb(action="key", value=key).pack(),
         )
     ]])
+    await state.clear()
     await state.set_state(TxtStates.waiting_text)
     await state.update_data(key=key)
-    await safe_edit(call, intro, cancel_kb)
+    await render_screen_call(call, state, intro, cancel_kb)
     await call.answer()
 
 
@@ -240,17 +242,26 @@ async def cb_edit_start(call: CallbackQuery, callback_data: TxtCb, state: FSMCon
 async def msg_receive_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     key = data.get("key")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✖️ Отмена",
+            callback_data=TxtCb(action="key", value=key or "").pack(),
+        )
+    ]])
     if not key:
+        await render_screen_msg(message, state, "Состояние потерялось, открой /sudo заново.", cancel_kb)
         await state.clear()
-        await message.answer("Состояние потерялось, открой /sudo заново.")
         return
 
     new_value = message.html_text
     ok, err = validate(key, new_value)
     if not ok:
-        await message.answer(
+        await render_screen_msg(
+            message, state,
             f"❌ <b>Не получилось сохранить:</b>\n{err}\n\n"
-            f"Попробуй ещё раз — пришли новый текст следующим сообщением."
+            f"Попробуй ещё раз — пришли новый текст следующим сообщением.",
+            cancel_kb,
+            keep_input=True,
         )
         return  # FSM stays — admin can resubmit
 
@@ -272,13 +283,14 @@ async def msg_receive_text(message: Message, state: FSMContext) -> None:
             callback_data=TxtCb(action="key", value=key).pack(),
         )],
     ])
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         "👁 <b>Предпросмотр (как увидит пользователь):</b>\n"
         "─────────────────────\n"
         f"{preview}\n"
         "─────────────────────\n\n"
         "Сохранить?",
-        reply_markup=confirm_kb,
+        confirm_kb,
     )
 
 
@@ -287,7 +299,13 @@ async def cb_edit_again(call: CallbackQuery, callback_data: TxtCb, state: FSMCon
     key = callback_data.value or ""
     await state.set_state(TxtStates.waiting_text)
     await state.update_data(key=key, new_value=None)
-    await call.message.answer("Жду новый текст следующим сообщением.")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✖️ Отмена",
+            callback_data=TxtCb(action="key", value=key).pack(),
+        )
+    ]])
+    await render_screen_call(call, state, "Жду новый текст следующим сообщением.", cancel_kb)
     await call.answer()
 
 
@@ -314,9 +332,8 @@ async def cb_save(call: CallbackQuery, callback_data: TxtCb, state: FSMContext) 
         {"before": before[:500], "after": new_value[:500]},
     )
     await state.clear()
-    await call.message.answer("✅ Текст сохранён.")
     await _key_card(call, key)
-    await call.answer()
+    await call.answer("✅ Текст сохранён.")
 
 
 # ---------- reset flow ----------

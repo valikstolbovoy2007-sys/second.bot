@@ -152,6 +152,7 @@ async def cb_chain_manual(call: CallbackQuery, callback_data: ArrCb, state: FSMC
     if not await is_super_admin(call.from_user.id):
         await call.answer("Только супер-админ", show_alert=True)
         return
+    await state.clear()
     await state.set_state(ArrStates.chain_date_input)
     await state.update_data(chain=callback_data.value)
     await render_screen_call(
@@ -290,6 +291,7 @@ async def cb_manual(call: CallbackQuery, callback_data: ArrCb, state: FSMContext
     if not await can_access_shop(call.from_user.id, callback_data.shop_id):
         await call.answer("Нет доступа", show_alert=True)
         return
+    await state.clear()
     await state.set_state(ArrStates.date_input)
     await state.update_data(shop_id=callback_data.shop_id)
     await render_screen_call(

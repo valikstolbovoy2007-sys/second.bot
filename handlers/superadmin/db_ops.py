@@ -17,7 +17,7 @@ from aiogram.types import (
 
 from data.db import pool
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.json_io import deserialize, export_dump, import_dump, serialize
 
@@ -25,6 +25,12 @@ log = logging.getLogger(__name__)
 router = Router(name="sa_db")
 router.message.filter(IsSuperAdmin())
 router.callback_query.filter(IsSuperAdmin())
+
+
+def _db_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← В меню DB", callback_data="sa:db:menu")],
+    ])
 
 
 class DbStates(StatesGroup):
@@ -86,24 +92,33 @@ async def cb_backup(call: CallbackQuery) -> None:
     if not pg_dump:
         await call.answer("pg_dump не найден в PATH", show_alert=True)
         return
-    await call.message.answer("⏳ Делаю бэкап…")
+    await safe_edit(call, "⏳ Делаю бэкап…")
     proc = await asyncio.create_subprocess_exec(
         pg_dump, settings.DATABASE_URL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     out, err = await proc.communicate()
     if proc.returncode != 0:
-        await call.message.answer(f"❌ pg_dump ошибка:\n<code>{err.decode(errors='ignore')[:500]}</code>")
+        await safe_edit(
+            call,
+            f"❌ pg_dump ошибка:\n<code>{err.decode(errors='ignore')[:500]}</code>",
+            _db_menu_kb(),
+        )
         await call.answer()
         return
     with gzip.open(name, "wb") as f:
         f.write(out)
     size_kb = os.path.getsize(name) // 1024
     await audit_write(call.from_user.id, "db.backup", "db", name, {"size_kb": size_kb})
+    await safe_edit(
+        call,
+        f"✅ Бэкап создан: <code>{name}</code> ({size_kb} KiB)\nФайл послан ниже.",
+        _db_menu_kb(),
+    )
     try:
         await call.message.answer_document(FSInputFile(name), caption=f"✅ Бэкап {size_kb} KiB")
     except Exception as e:
-        await call.message.answer(f"Бэкап создан: {name} ({size_kb} KiB), но не отправился: {e}")
+        await safe_edit(call, f"Бэкап создан: {name} ({size_kb} KiB), но не отправился: {e}", _db_menu_kb())
     await call.answer()
 
 
@@ -111,13 +126,19 @@ async def cb_backup(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "sa:db:expjson")
 async def cb_export_json(call: CallbackQuery) -> None:
-    await call.message.answer("⏳ Готовлю выгрузку…")
+    await safe_edit(call, "⏳ Готовлю выгрузку…")
     dump = await export_dump()
     raw = serialize(dump)
     fname = f"shops_{date.today().isoformat()}.json"
     await audit_write(
         call.from_user.id, "db.export_json", "db", fname,
         {"shops": len(dump.get("shops", [])), "chains": len(dump.get("chains", []))},
+    )
+    await safe_edit(
+        call,
+        "✅ Выгрузка готова, файл послан ниже:\n"
+        f"Магазинов: {len(dump.get('shops', []))}, сетей: {len(dump.get('chains', []))}",
+        _db_menu_kb(),
     )
     await call.message.answer_document(
         BufferedInputFile(raw, filename=fname),
@@ -130,29 +151,32 @@ async def cb_export_json(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "sa:db:impjson")
 async def cb_import_prompt(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(DbStates.json_upload)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "⬆️ Пришли .json файл, экспортированный из этого бота.\n"
         "После загрузки спрошу, делать ли upsert по (имя, адрес).\n"
-        "/cancel — выйти."
+        "/cancel — выйти.",
+        _db_menu_kb(),
     )
     await call.answer()
 
 
 @router.message(DbStates.json_upload, F.text == "/cancel")
 async def msg_imp_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _db_menu_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(DbStates.json_upload, F.document)
 async def msg_imp_doc(message: Message, state: FSMContext, bot: Bot) -> None:
     doc = message.document
     if not (doc.file_name or "").lower().endswith(".json"):
-        await message.answer("Нужен .json. Пришли ещё раз.")
+        await render_screen_msg(message, state, "Нужен .json. Пришли ещё раз.", _db_menu_kb())
         return
     if doc.file_size and doc.file_size > 10 * 1024 * 1024:
-        await message.answer("Файл слишком большой (>10 MB).")
+        await render_screen_msg(message, state, "Файл слишком большой (>10 MB).", _db_menu_kb())
         return
     file = await bot.get_file(doc.file_id)
     buf = await bot.download_file(file.file_path)
@@ -160,16 +184,17 @@ async def msg_imp_doc(message: Message, state: FSMContext, bot: Bot) -> None:
     try:
         dump = deserialize(raw)
     except Exception as e:
-        await message.answer(f"❌ Не валидный JSON: {e}")
+        await render_screen_msg(message, state, f"❌ Не валидный JSON: {e}", _db_menu_kb())
         return
     n_shops = len(dump.get("shops") or [])
     n_chains = len(dump.get("chains") or [])
     await state.update_data(dump=dump)
     await state.set_state(DbStates.json_replace_choice)
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"📦 В файле: магазинов {n_shops}, сетей {n_chains}.\n\n"
         "Как импортировать?",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить новые (без замены)",
                                   callback_data="sa:db:imp:add")],
             [InlineKeyboardButton(text="🔁 Upsert по (имя, адрес)",
@@ -181,8 +206,8 @@ async def msg_imp_doc(message: Message, state: FSMContext, bot: Bot) -> None:
 
 @router.callback_query(DbStates.json_replace_choice, F.data == "sa:db:imp:cancel")
 async def cb_imp_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await safe_edit(call, "Импорт отменён.", _db_menu_kb())
     await state.clear()
-    await call.message.answer("Импорт отменён.")
     await call.answer()
 
 
@@ -195,24 +220,26 @@ async def cb_imp_apply(call: CallbackQuery, state: FSMContext) -> None:
     if not dump:
         await call.answer("Нет данных", show_alert=True)
         return
-    await call.message.answer("⏳ Импортирую…")
+    await safe_edit(call, "⏳ Импортирую…")
     try:
         result = await import_dump(dump, replace_shops=replace)
     except Exception as e:
         log.exception("import_dump failed")
-        await call.message.answer(f"❌ Ошибка: {e}")
+        await safe_edit(call, f"❌ Ошибка: {e}", _db_menu_kb())
         await call.answer()
         return
     await audit_write(
         call.from_user.id, "db.import_json", "db", None,
         {"replace": replace, **result},
     )
-    await call.message.answer(
+    await safe_edit(
+        call,
         "✅ Импортировано:\n"
         f"  Сетей: {result['chains']}\n"
         f"  Новых магазинов: {result['shops_new']}\n"
         f"  Обновлено магазинов: {result['shops_updated']}\n"
-        f"  Фотографий: {result['photos']}"
+        f"  Фотографий: {result['photos']}",
+        _db_menu_kb(),
     )
     await call.answer("Готово")
 
@@ -239,21 +266,24 @@ def _db_name_from_url(url: str) -> str:
 async def cb_restore_prompt(call: CallbackQuery, state: FSMContext) -> None:
     from config import settings
     db = _db_name_from_url(settings.DATABASE_URL)
+    await state.clear()
     await state.set_state(DbStates.restore_upload)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "♻️ <b>Восстановление БД</b>\n\n"
         "Это <b>полностью перезапишет</b> текущую базу данных содержимым "
         "загружаемого дампа. Откатить операцию нельзя.\n\n"
         f"Текущая БД: <code>{html.escape(db)}</code>\n\n"
         "Пришли .sql.gz файл (созданный pg_dump). Или /cancel — выйти.",
+        _db_menu_kb(),
     )
     await call.answer()
 
 
 @router.message(DbStates.restore_upload, F.text == "/cancel")
 async def msg_restore_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _db_menu_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(DbStates.restore_upload, F.document)
@@ -261,10 +291,10 @@ async def msg_restore_doc(message: Message, state: FSMContext, bot: Bot) -> None
     doc = message.document
     name = (doc.file_name or "").lower()
     if not name.endswith(".sql.gz"):
-        await message.answer("Нужен .sql.gz. Пришли ещё раз или /cancel.")
+        await render_screen_msg(message, state, "Нужен .sql.gz. Пришли ещё раз или /cancel.", _db_menu_kb())
         return
     if doc.file_size and doc.file_size > 200 * 1024 * 1024:
-        await message.answer("Файл слишком большой (>200 MB).")
+        await render_screen_msg(message, state, "Файл слишком большой (>200 MB).", _db_menu_kb())
         return
     from pathlib import Path
     Path("backups").mkdir(exist_ok=True)
@@ -276,11 +306,13 @@ async def msg_restore_doc(message: Message, state: FSMContext, bot: Bot) -> None
     await state.update_data(restore_path=local, restore_db=db)
     await state.set_state(DbStates.restore_confirm)
     size_kb = os.path.getsize(local) // 1024
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"📦 Файл получен: {size_kb} KiB.\n\n"
         f"⚠️ <b>ВНИМАНИЕ:</b> после подтверждения текущая БД будет полностью перезаписана.\n"
         f"Чтобы продолжить, пришли точное имя текущей базы: <code>{html.escape(db)}</code>\n\n"
         f"Любой другой текст или /cancel — отмена.",
+        _db_menu_kb(),
     )
 
 
@@ -291,15 +323,14 @@ async def msg_restore_confirm(message: Message, state: FSMContext) -> None:
     path = data.get("restore_path")
     text = message.text.strip()
     if text == "/cancel" or text != expected:
+        await render_screen_msg(message, state, "Отменено.", _db_menu_kb())
         await state.clear()
         try:
             if path:
                 os.remove(path)
         except OSError:
             pass
-        await message.answer("Отменено.")
         return
-    await state.clear()
     import asyncio
     import shutil
 
@@ -308,12 +339,14 @@ async def msg_restore_confirm(message: Message, state: FSMContext) -> None:
     psql = shutil.which("psql")
     gunzip = shutil.which("gunzip") or shutil.which("gzip")
     if not psql:
-        await message.answer("❌ psql не найден в PATH.")
+        await render_screen_msg(message, state, "❌ psql не найден в PATH.", _db_menu_kb())
+        await state.clear()
         return
     if not gunzip:
-        await message.answer("❌ gunzip/gzip не найден в PATH.")
+        await render_screen_msg(message, state, "❌ gunzip/gzip не найден в PATH.", _db_menu_kb())
+        await state.clear()
         return
-    await message.answer("⏳ Восстанавливаю… Это может занять время.")
+    await render_screen_msg(message, state, "⏳ Восстанавливаю… Это может занять время.", _db_menu_kb())
     decomp = await asyncio.create_subprocess_exec(
         gunzip, "-c", path,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -338,13 +371,19 @@ async def msg_restore_confirm(message: Message, state: FSMContext) -> None:
     )
     if rc != 0:
         tail = (psql_err or b"")[-800:].decode(errors="ignore")
-        await message.answer(
-            f"❌ Восстановление не удалось (rc={rc}):\n<pre>{html.escape(tail)}</pre>"
+        await render_screen_msg(
+            message, state,
+            f"❌ Восстановление не удалось (rc={rc}):\n<pre>{html.escape(tail)}</pre>",
+            _db_menu_kb(),
         )
+        await state.clear()
         return
-    await message.answer(
-        "✅ База восстановлена. Перезапусти бота, чтобы соединения подобрали актуальную схему."
+    await render_screen_msg(
+        message, state,
+        "✅ База восстановлена. Перезапусти бота, чтобы соединения подобрали актуальную схему.",
+        _db_menu_kb(),
     )
+    await state.clear()
 
 
 _FORBIDDEN_SQL = (
@@ -371,19 +410,22 @@ def _is_safe_select(sql: str) -> tuple[bool, str]:
 
 @router.callback_query(F.data == "sa:db:sql")
 async def cb_sql_prompt(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(DbStates.sql_query)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "🧪 <b>SQL-консоль</b> (только SELECT/WITH/EXPLAIN)\n\n"
         "Пришли один SQL-запрос. Лимит 200 строк (LIMIT добавлю сам, если нет).\n"
         "/cancel — выйти.",
+        _db_menu_kb(),
     )
     await call.answer()
 
 
 @router.message(DbStates.sql_query, F.text == "/cancel")
 async def msg_sql_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _db_menu_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(DbStates.sql_query, F.text)
@@ -391,7 +433,7 @@ async def msg_sql_run(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     ok, err = _is_safe_select(raw)
     if not ok:
-        await message.answer(f"❌ {err}")
+        await render_screen_msg(message, state, f"❌ {err}", _db_menu_kb(), keep_input=True)
         return
     sql = raw.rstrip(";").strip()
     if "LIMIT" not in sql.upper() and not sql.upper().startswith("EXPLAIN"):
@@ -403,7 +445,7 @@ async def msg_sql_run(message: Message, state: FSMContext) -> None:
             async with conn.transaction(readonly=True):
                 rows = await conn.fetch(sql)
     except Exception as e:
-        await message.answer(f"❌ Ошибка: <code>{str(e)[:500]}</code>")
+        await render_screen_msg(message, state, f"❌ Ошибка: <code>{str(e)[:500]}</code>", _db_menu_kb(), keep_input=True)
         return
     ms = int((time.time() - t0) * 1000)
     await audit_write(
@@ -411,8 +453,8 @@ async def msg_sql_run(message: Message, state: FSMContext) -> None:
         {"rows": len(rows), "ms": ms, "sql": raw[:300]},
     )
     if not rows:
+        await render_screen_msg(message, state, f"✅ 0 строк, {ms} мс", _db_menu_kb())
         await state.clear()
-        await message.answer(f"✅ 0 строк, {ms} мс")
         return
     cols = list(rows[0].keys())
     if len(rows) <= 30 and sum(len(str(r)) for r in rows) < 3500:
@@ -421,8 +463,8 @@ async def msg_sql_run(message: Message, state: FSMContext) -> None:
             lines.append(" | ".join(str(r[c])[:50] for c in cols))
         text = "<pre>" + "\n".join(lines) + "</pre>"
         if len(text) < 4000:
+            await render_screen_msg(message, state, text, _db_menu_kb())
             await state.clear()
-            await message.answer(text)
             return
     import io
     buf = io.StringIO()
@@ -430,6 +472,11 @@ async def msg_sql_run(message: Message, state: FSMContext) -> None:
     for r in rows:
         buf.write(";".join(str(r[c]).replace(";", ",").replace("\n", " ") for c in cols) + "\n")
     data = buf.getvalue().encode("utf-8")
+    await render_screen_msg(
+        message, state,
+        f"✅ {len(rows)} строк, {ms} мс — файл ниже.",
+        _db_menu_kb(),
+    )
     await state.clear()
     await message.answer_document(
         BufferedInputFile(data, filename=f"query_{date.today().isoformat()}.csv"),

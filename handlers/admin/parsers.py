@@ -234,6 +234,7 @@ async def cb_cron_prompt(call: CallbackQuery, callback_data: ParCb, state: FSMCo
     if not await is_super_admin(call.from_user.id):
         await call.answer("Только супер-админ", show_alert=True)
         return
+    await state.clear()
     await state.set_state(ParserScheduleStates.cron)
     await state.update_data(parser_key=callback_data.key)
     cur = await get_cron(callback_data.key)

@@ -27,7 +27,7 @@ from data.repos.admin_roles import (
 from data.repos.shops import get_shop, list_all_shops
 from data.repos.users import get_tg_id_by_username
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 
 log = logging.getLogger(__name__)
@@ -71,21 +71,30 @@ async def cb_list(call: CallbackQuery, callback_data: AdmCb | None = None) -> No
 
 # ---------- ADD ----------
 
+def _add_prompt_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data=AdmCb(action="list").pack())],
+    ])
+
+
 @router.callback_query(AdmCb.filter(F.action == "add"))
 async def cb_add_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(AdmStates.add_id)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         "Введи @username нового админа. Работает только если он уже хотя бы "
         "раз писал этому боту (например, /start) — иначе бот не знает его ID.\n"
         "Отмена: /cancel",
+        _add_prompt_kb(),
     )
     await call.answer()
 
 
 @router.message(AdmStates.add_id, F.text == "/cancel")
 async def msg_add_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _add_prompt_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(AdmStates.add_id, F.text)
@@ -97,24 +106,30 @@ async def msg_add_id(message: Message, state: FSMContext) -> None:
     else:
         tg_id = await get_tg_id_by_username(raw)
         if tg_id is None:
-            await message.answer(
+            await render_screen_msg(
+                message, state,
                 f"Не нашёл @{raw} — он ещё ни разу не писал этому боту. "
-                "Попроси его отправить /start и повтори."
+                "Попроси его отправить /start и повтори.",
+                _add_prompt_kb(),
             )
             return
     await add_admin(tg_id, "admin", message.from_user.id)
     await audit_write(message.from_user.id, "admin.add", "admin", tg_id, {"role": "admin"})
-    await state.clear()
     rows = [[InlineKeyboardButton(
         text="📌 Назначить магазины",
         callback_data=AdmCb(action="assign", tg_id=tg_id).pack(),
+    )], [InlineKeyboardButton(
+        text="← К списку",
+        callback_data=AdmCb(action="list").pack(),
     )]]
     who = f"@{html.escape(raw)} ({tg_id})" if not raw.lstrip("-").isdigit() else str(tg_id)
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"✅ Админ {who} добавлен с ролью <b>admin</b>.\n"
         f"Теперь назначь ему магазины — иначе он не увидит ничего.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
+    await state.clear()
 
 
 # ---------- CARD ----------
@@ -327,16 +342,21 @@ async def cb_setrole(call: CallbackQuery, callback_data: AdmCb) -> None:
 
 @router.callback_query(AdmCb.filter(F.action == "note"))
 async def cb_note_start(call: CallbackQuery, callback_data: AdmCb, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(AdmStates.note)
     await state.update_data(target=callback_data.tg_id)
-    await call.message.answer("Введи заметку (или /clear чтобы стереть, /cancel для отмены):")
+    await render_screen_call(
+        call, state,
+        "Введи заметку (или /clear чтобы стереть, /cancel для отмены):",
+        _add_prompt_kb(),
+    )
     await call.answer()
 
 
 @router.message(AdmStates.note, F.text == "/cancel")
 async def msg_note_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _add_prompt_kb())
     await state.clear()
-    await message.answer("Отменено.")
 
 
 @router.message(AdmStates.note, F.text)
@@ -347,8 +367,17 @@ async def msg_note(message: Message, state: FSMContext) -> None:
     note = None if raw == "/clear" else raw[:500]
     await set_note(target, note)
     await audit_write(message.from_user.id, "admin.set_note", "admin", target)
+    await render_screen_msg(
+        message, state,
+        "✅ Заметка обновлена.",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="← К админу",
+                callback_data=AdmCb(action="card", tg_id=target).pack(),
+            )],
+        ]),
+    )
     await state.clear()
-    await message.answer("✅ Заметка обновлена.")
 
 
 # ---------- REMOVE ----------

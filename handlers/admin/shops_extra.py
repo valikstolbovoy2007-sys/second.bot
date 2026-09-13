@@ -60,6 +60,7 @@ def _search_cancel_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "adm:shops:search")
 async def cb_search_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await state.set_state(ShopSearchStates.query)
     await render_screen_call(call, state, "🔎 Введи часть имени или адреса:", _search_cancel_kb())
     await call.answer()
@@ -141,6 +142,7 @@ async def cb_addphoto(call: CallbackQuery, callback_data: ShopXCb, state: FSMCon
     if not await can_access_shop(call.from_user.id, callback_data.shop_id):
         await call.answer("Нет доступа", show_alert=True)
         return
+    await state.clear()
     await state.set_state(ShopPhotoStates.upload)
     await state.update_data(shop_id=callback_data.shop_id)
     await render_screen_call(

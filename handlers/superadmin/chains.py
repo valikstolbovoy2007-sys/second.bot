@@ -25,7 +25,7 @@ from data.repos.chains import (
     update_chain_field,
 )
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from states.admin_states import ChainStates
 
@@ -133,7 +133,9 @@ async def cb_view(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_new(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ChainStates.name)
-    await call.message.answer("Введи <b>имя сети</b> (1–80 символов):", reply_markup=_cancel_kb())
+    await render_screen_call(
+        call, state, "Введи <b>имя сети</b> (1–80 символов):", _cancel_kb(),
+    )
     await call.answer()
 
 
@@ -144,23 +146,34 @@ async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
+@router.message(ChainStates.name, F.text == "/cancel")
+async def msg_name_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _back_kb("sa:chain:list:0"))
+    await state.clear()
+
+
 @router.message(ChainStates.name, F.text)
 async def msg_new_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
     if not (1 <= len(name) <= 80):
-        await message.answer("Имя 1–80 символов. Повтори.")
+        await render_screen_msg(message, state, "Имя 1–80 символов. Повтори.", _cancel_kb())
         return
     try:
         chain_id = await create_chain(name=name)
     except Exception as e:
         log.exception("create_chain failed")
-        await message.answer(f"❌ Ошибка: {html.escape(str(e))}")
+        await render_screen_msg(
+            message, state, f"❌ Ошибка: {html.escape(str(e))}", _cancel_kb(),
+        )
         await state.clear()
         return
     await audit_write(message.from_user.id, "chain.create", "chain", chain_id, {"name": name})
-    await state.clear()
     c = await get_chain(chain_id)
-    await message.answer(_format_card(c), reply_markup=_view_kb(chain_id, c.is_active))
+    await render_screen_msg(
+        message, state,
+        _format_card(c), _view_kb(chain_id, c.is_active),
+    )
+    await state.clear()
 
 
 # ---------- edit ----------
@@ -170,6 +183,7 @@ async def cb_edit(call: CallbackQuery, state: FSMContext) -> None:
     parts = call.data.split(":")
     chain_id = int(parts[3])
     field = parts[4]
+    await state.clear()
     await state.set_state(ChainStates.edit_value)
     await state.update_data(chain_id=chain_id, field=field)
     prompt = {
@@ -178,8 +192,14 @@ async def cb_edit(call: CallbackQuery, state: FSMContext) -> None:
         "parser_key": "Введи parser_key (например, megahand) или '-' чтобы очистить:",
         "sort_order": "Введи целое число для sort_order (0 — без приоритета):",
     }.get(field, "Введи значение:")
-    await call.message.answer(prompt, reply_markup=_cancel_kb())
+    await render_screen_call(call, state, prompt, _cancel_kb())
     await call.answer()
+
+
+@router.message(ChainStates.edit_value, F.text == "/cancel")
+async def msg_edit_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Отменено.", _back_kb("sa:chain:list:0"))
+    await state.clear()
 
 
 @router.message(ChainStates.edit_value, F.text)
@@ -192,7 +212,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     value: object
     if field == "name":
         if not (1 <= len(raw) <= 80):
-            await message.answer("1–80 символов. Повтори.")
+            await render_screen_msg(message, state, "1–80 символов. Повтори.", _cancel_kb())
             return
         value = raw
     elif field == "default_cycle":
@@ -205,7 +225,7 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
                     raise ValueError
                 value = v
             except ValueError:
-                await message.answer("Целое число 1–365 или '-'. Повтори.")
+                await render_screen_msg(message, state, "Целое число 1–365 или '-'. Повтори.", _cancel_kb())
                 return
     elif field == "parser_key":
         value = None if raw == "-" else raw[:64]
@@ -213,10 +233,10 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         try:
             value = int(raw)
         except ValueError:
-            await message.answer("Целое число. Повтори.")
+            await render_screen_msg(message, state, "Целое число. Повтори.", _cancel_kb())
             return
     else:
-        await message.answer("Неизвестное поле.")
+        await render_screen_msg(message, state, "Неизвестное поле.", _back_kb("sa:chain:list:0"))
         await state.clear()
         return
 
@@ -224,7 +244,9 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         await update_chain_field(chain_id, field, value)
     except Exception as e:
         log.exception("update_chain_field failed")
-        await message.answer(f"❌ Ошибка: {html.escape(str(e))}")
+        await render_screen_msg(
+            message, state, f"❌ Ошибка: {html.escape(str(e))}", _cancel_kb(),
+        )
         await state.clear()
         return
 
@@ -235,9 +257,12 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         chain_id,
         {"field": field, "value": value},
     )
-    await state.clear()
     c = await get_chain(chain_id)
-    await message.answer("✅ Обновлено.\n\n" + _format_card(c), reply_markup=_view_kb(chain_id, c.is_active))
+    await render_screen_msg(
+        message, state,
+        "✅ Обновлено.\n\n" + _format_card(c), _view_kb(chain_id, c.is_active),
+    )
+    await state.clear()
 
 
 # ---------- toggle / delete ----------
