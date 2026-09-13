@@ -45,6 +45,10 @@ async def render(
         # Меню уже удалили (телепорт/удаление вручную) — шлём заново.
         if "message to edit not found" in str(exc) or "there is no message" in str(exc):
             return await _teleport(bot, chat_id, message_id, text, reply_markup, edit_kwargs)
+        # В сообщении медиа, а не текст (фото→текст нельзя отредактировать):
+        # отправляем текст заново и удаляем старое сообщение.
+        if "there is no text in the message to edit" in str(exc):
+            return await _teleport(bot, chat_id, message_id, text, reply_markup, edit_kwargs)
         raise
 
 

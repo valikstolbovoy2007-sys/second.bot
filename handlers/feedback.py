@@ -35,17 +35,27 @@ router = Router(name="feedback")
 _ZWJ = "\u200d"
 _PREVIEW_PAD = 20
 
+_TOO_LONG_TEXT = (
+    "⚠️ <b>Слишком длинное сообщение</b>\n\n"
+    "Максимум — 4000 символов. Сократи и пришли ещё раз."
+)
+
 
 def _pad_to_width(text: str, width: int = _PREVIEW_PAD) -> str:
-    """Довести видимую длину строки до width символов (для превью репорта)."""
+    """Довести видимую длину строки до width символов (для превью)."""
     if len(text) < width:
         text += " " * (width - len(text)) + _ZWJ
     return text
 
 
-def _report_preview(stored_text: str) -> str:
+def _report_preview(stored_text: str, is_photo: bool = False) -> str:
+    """Превью репорта/сообщения с подписью о прикреплённом фото."""
     line = _pad_to_width((stored_text or "…").replace("\n", " "))
-    return f"✉️ <b>Ваше сообщение:</b>\n<pre>{html.escape(line)}</pre>"
+    parts = ["✉️ <b>Ваше сообщение:</b>"]
+    if is_photo:
+        parts.append("📎 <i>Фото прикреплено</i>")
+    parts.append(f"<pre>{html.escape(line)}</pre>")
+    return "\n".join(parts)
 
 
 def _report_cancel_kb() -> InlineKeyboardMarkup:
@@ -65,40 +75,53 @@ def _report_confirm_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def _no_kb() -> InlineKeyboardMarkup:
+def _fb_confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Общее сообщение", callback_data="fb:noshop")],
-        [InlineKeyboardButton(text="✖️ Отмена", callback_data="fb:cancel")],
+        [
+            InlineKeyboardButton(text="📤 Отправить", callback_data="fb:send"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data="fb:discard"),
+        ],
     ])
 
 
-async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
-    shops, total = await list_subscribed(user_id, limit=10, offset=0)
-    if not shops:
-        await state.set_state(FeedbackStates.waiting_text)
-        await message.answer(
-            "✉️ <b>Сообщение администратору</b>\n"
-            "\n"
-            "Опиши, что хочешь сообщить — приму и передам.\n"
-            "\n"
-            "<i>Отменить — /cancel</i>"
-        )
-        return
-
+def _fb_picker_kb(shops) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"🏪 {s.name}", callback_data=f"fb:shop:{s.id}")]
         for s in shops
     ]
     rows.append([InlineKeyboardButton(text="💬 Общее сообщение", callback_data="fb:noshop")])
     rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="fb:cancel")])
-    await state.set_state(FeedbackStates.pick_shop)
-    await message.answer(
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
+    """/feedback: команда сама становится экраном выбора магазина (без новых баблов)."""
+    shops, _total = await list_subscribed(user_id, limit=10, offset=0)
+    if not shops:
+        text = (
+            "✉️ <b>Сообщение администратору</b>\n"
+            "\n"
+            "Опиши, что хочешь сообщить — приму и передам.\n"
+            "\n"
+            "<i>Отменить — /cancel</i>"
+        )
+        new_id = await render(message.bot, message.chat.id, message.message_id, text)
+        await state.update_data(fb_msg_id=new_id)
+        await state.set_state(FeedbackStates.waiting_text)
+        return
+
+    text = (
         "✉️ <b>Сообщение администратору</b>\n"
         "\n"
         "К какому магазину относится сообщение?\n"
-        "<i>Если ни к какому — выбери «Общее сообщение».</i>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        "<i>Если ни к какому — выбери «Общее сообщение».</i>"
     )
+    new_id = await render(
+        message.bot, message.chat.id, message.message_id,
+        text, _fb_picker_kb(shops),
+    )
+    await state.update_data(fb_msg_id=new_id)
+    await state.set_state(FeedbackStates.pick_shop)
 
 
 @router.message(Command("feedback"))
@@ -119,29 +142,42 @@ async def cb_pick_shop(call: CallbackQuery, state: FSMContext) -> None:
     if not shop:
         await call.answer("⚠️ Магазин не найден", show_alert=True)
         return
-    await state.update_data(shop_id=shop_id)
-    await state.set_state(FeedbackStates.waiting_text)
-    await call.message.answer(
+    text = (
         f"📝 <b>Сообщение про «{html.escape(shop.name)}»</b>\n"
         "\n"
         "Опиши, что хочешь сообщить — приму и передам.\n"
         "\n"
         "<i>Отменить — /cancel</i>"
     )
+    new_id = await render(call.bot, call.message.chat.id, call.message.message_id, text)
+    await state.update_data(shop_id=shop.id, fb_msg_id=new_id)
+    await state.set_state(FeedbackStates.waiting_text)
     await call.answer()
 
 
 @router.callback_query(FeedbackStates.pick_shop, F.data == "fb:noshop")
 async def cb_noshop(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(shop_id=None)
-    await state.set_state(FeedbackStates.waiting_text)
-    await call.message.answer(
+    text = (
         "💬 <b>Общее сообщение</b>\n"
         "\n"
         "Опиши, что хочешь сообщить — приму и передам.\n"
         "\n"
         "<i>Отменить — /cancel</i>"
     )
+    new_id = await render(call.bot, call.message.chat.id, call.message.message_id, text)
+    await state.update_data(shop_id=None, fb_msg_id=new_id)
+    await state.set_state(FeedbackStates.waiting_text)
+    await call.answer()
+
+
+@router.callback_query(F.data == "fb:cancel")
+async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    """«Отмена» на пикере магазинов: экран удаляется, никаких новых баблов."""
+    await state.clear()
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
     await call.answer()
 
 
@@ -235,18 +271,16 @@ async def cb_report_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.callback_query(F.data == "fb:cancel")
-async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    await call.message.answer("✖️ Отменил.")
-    await call.answer()
-
-
 @router.message(FeedbackStates.waiting_text, Command("cancel"))
 async def fb_cancel(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    # Сам /cancel удаляется всегда — не оставляем командный мусор.
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     if data.get("report_msg_id"):
-        # Репорт-флоу: убираем прашивание и возвращаем карточку сешки.
+        # Репорт-флоу: прашивание удаляется, карточка возвращается.
         try:
             await message.bot.delete_message(message.chat.id, data["report_msg_id"])
         except TelegramBadRequest:
@@ -254,8 +288,13 @@ async def fb_cancel(message: Message, state: FSMContext) -> None:
         await state.clear()
         await _restore_card_fresh(message, data)
         return
+    # Обычный флоу (/feedback): экран-прашивание просто исчезает.
     await state.clear()
-    await message.answer("✖️ Отменил.")
+    if data.get("fb_msg_id") is not None:
+        try:
+            await message.bot.delete_message(message.chat.id, data["fb_msg_id"])
+        except TelegramBadRequest:
+            pass
 
 
 @router.message(FeedbackStates.waiting_text, F.photo | F.text)
@@ -264,23 +303,27 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
     is_photo = bool(message.photo)
     text = (message.caption if is_photo else message.text) or ""
     text = text.strip()
-    if len(text) > 4000:
-        await message.answer(
-            "⚠️ <b>Слишком длинное сообщение</b>\n\n"
-            "Максимум — 4000 символов. Сократи и пришли ещё раз."
-        )
-        return
-    stored_text = text or ("[Фото без подписи]" if is_photo else "")
     data = await state.get_data()
 
+    target_prompt = data.get("report_msg_id") or data.get("fb_msg_id")
+    if len(text) > 4000:
+        # Ввод не удаляем (это черновик, который нужно сократить), экран
+        # прашивания превращается в ошибку.
+        if target_prompt is not None:
+            await render(bot, message.chat.id, target_prompt, _TOO_LONG_TEXT)
+        else:
+            await message.answer(_TOO_LONG_TEXT)
+        return
+
+    stored_text = text or ("[Фото без подписи]" if is_photo else "")
+    photo_file_id = message.photo[-1].file_id if is_photo else None
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
     if data.get("report_msg_id") is not None:
-        # Флоу «Исправить неточность»: ввод сразу удаляется, прашивание
-        # превращается в превью с кнопками «Отправить»/«Удалить».
-        photo_file_id = message.photo[-1].file_id if is_photo else None
-        try:
-            await message.delete()
-        except TelegramBadRequest:
-            pass
+        # Флоу «Исправить неточность»: прашивание превращается в превью.
         await state.update_data(
             report_text=stored_text,
             report_is_photo=is_photo,
@@ -289,43 +332,91 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
         await state.set_state(FeedbackStates.confirm)
         await render(
             bot, message.chat.id, data["report_msg_id"],
-            _report_preview(stored_text),
+            _report_preview(stored_text, is_photo),
             _report_confirm_kb(),
         )
         return
 
-    # Обычный флоу (из /feedback): сохранить сразу.
-    shop_id = data.get("shop_id")
-    fb_id = await save_feedback(user_id, stored_text, shop_id=shop_id)
-    await state.clear()
-    await message.answer(
-        "✅ <b>Спасибо!</b>\n"
-        "Сообщение получено — администратор увидит его в ближайшее время."
+    # Обычный флоу (/feedback): прашивание превращается в превью.
+    await state.update_data(
+        fb_text=stored_text,
+        fb_is_photo=is_photo,
+        fb_photo_id=photo_file_id,
     )
+    await state.set_state(FeedbackStates.confirm)
+    if data.get("fb_msg_id") is not None:
+        await render(
+            bot, message.chat.id, data["fb_msg_id"],
+            _report_preview(stored_text, is_photo),
+            _fb_confirm_kb(),
+        )
+    else:
+        await bot.send_message(
+            message.chat.id,
+            _report_preview(stored_text, is_photo),
+            reply_markup=_fb_confirm_kb(),
+        )
 
-    if settings.ADMIN_CHAT_ID:
-        try:
-            uname = f"@{message.from_user.username}" if message.from_user.username else f"id={message.from_user.id}"
-            shop_label = ""
-            if shop_id:
-                shop = await get_shop(shop_id)
-                if shop:
-                    shop_label = f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
-            header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
-            if is_photo:
-                caption = f"{header}\n\n{html.escape(text)}" if text else header
-                await bot.send_photo(
-                    settings.ADMIN_CHAT_ID,
-                    message.photo[-1].file_id,
-                    caption=caption[:1024],
-                )
-            else:
-                await bot.send_message(
-                    settings.ADMIN_CHAT_ID,
-                    f"{header}\n\n{html.escape(text)}",
-                )
-        except Exception:
-            log.exception("failed to forward feedback to admin chat")
+
+async def _notify_admin(
+    bot: Bot, *, user_id: int, username: str | None, shop_id: int | None,
+    fb_id: int, text: str, is_photo: bool, photo_id: str | None,
+) -> None:
+    if not settings.ADMIN_CHAT_ID:
+        return
+    try:
+        uname = f"@{username}" if username else f"id={user_id}"
+        shop_label = ""
+        if shop_id:
+            shop = await get_shop(shop_id)
+            if shop:
+                shop_label = f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
+        header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
+        if is_photo and photo_id:
+            caption = f"{header}\n\n{html.escape(text)}" if text else header
+            await bot.send_photo(
+                settings.ADMIN_CHAT_ID, photo_id,
+                caption=caption[:1024],
+            )
+        else:
+            await bot.send_message(
+                settings.ADMIN_CHAT_ID,
+                f"{header}\n\n{html.escape(text)}",
+            )
+    except Exception:
+        log.exception("failed to forward feedback to admin chat")
+
+
+@router.callback_query(FeedbackStates.confirm, F.data == "fb:send")
+async def cb_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    text = data.get("fb_text") or ""
+    await state.clear()
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    fb_id = await save_feedback(user_id, text, shop_id=data.get("shop_id"))
+    await _notify_admin(
+        bot,
+        user_id=user_id, username=call.from_user.username,
+        shop_id=data.get("shop_id"), fb_id=fb_id, text=text,
+        is_photo=bool(data.get("fb_is_photo")), photo_id=data.get("fb_photo_id"),
+    )
+    await show_text_view(
+        call,
+        "✅ <b>Спасибо!</b>\n"
+        "Сообщение получено — администратор увидит его в ближайшее время.",
+        None,
+    )
+    await call.answer("✅ Отправлено")
+
+
+@router.callback_query(FeedbackStates.confirm, F.data == "fb:discard")
+async def cb_discard(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+    await call.answer("🗑 Удалено")
 
 
 @router.callback_query(FeedbackStates.confirm, F.data == "fb:report_send")
@@ -335,31 +426,12 @@ async def cb_report_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> No
     await state.clear()
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     fb_id = await save_feedback(user_id, text, shop_id=data.get("shop_id"))
-
-    if settings.ADMIN_CHAT_ID:
-        try:
-            uname = f"@{call.from_user.username}" if call.from_user.username else f"id={call.from_user.id}"
-            shop_label = ""
-            if data.get("shop_id"):
-                shop = await get_shop(int(data["shop_id"]))
-                if shop:
-                    shop_label = f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
-            header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
-            if data.get("report_is_photo") and data.get("report_photo_id"):
-                caption = f"{header}\n\n{html.escape(text)}" if text else header
-                await bot.send_photo(
-                    settings.ADMIN_CHAT_ID,
-                    data["report_photo_id"],
-                    caption=caption[:1024],
-                )
-            else:
-                await bot.send_message(
-                    settings.ADMIN_CHAT_ID,
-                    f"{header}\n\n{html.escape(text)}",
-                )
-        except Exception:
-            log.exception("failed to forward feedback to admin chat")
-
+    await _notify_admin(
+        bot,
+        user_id=user_id, username=call.from_user.username,
+        shop_id=data.get("shop_id"), fb_id=fb_id, text=text,
+        is_photo=bool(data.get("report_is_photo")), photo_id=data.get("report_photo_id"),
+    )
     await _redraw_shop_card(call, user_id, data)
     await call.answer("✅ Отправлено")
 
@@ -376,7 +448,11 @@ async def cb_report_discard(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(Command("cancel"))
 async def cmd_cancel_anywhere(message: Message, state: FSMContext) -> None:
     if await state.get_state() is None:
-        await message.answer("ℹ️ Нечего отменять.")
+        # Сам /cancel превращается в инфо-строку, без нового бабла.
+        await render(message.bot, message.chat.id, message.message_id, "ℹ️ Нечего отменять.")
         return
     await state.clear()
-    await message.answer("✖️ Отменил.")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
