@@ -7,6 +7,9 @@ Walks the operator through:
   4) confirmation -> enqueue. Dispatch is handled by services/broadcasts.
 
 Also exposes a history view with pause / resume / cancel actions.
+
+Весь флоу создания живёт в одном сообщении: экраны превращаются на месте,
+ввод администратора (текст/файл/фото) сразу удаляется.
 """
 import html
 import json
@@ -28,7 +31,7 @@ from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from data.repos.chains import list_chains
 from data.repos.shops import list_shops_scoped
 from handlers.admin.filters import IsSuperAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.broadcasts import (
     count_recent_by_actor,
@@ -65,10 +68,73 @@ def _menu_kb() -> InlineKeyboardMarkup:
     ])
 
 
+MENU_TEXT = "📣 <b>Рассылки</b>"
+
+
+def _menu_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
+    ])
+
+
+TEXT_PROMPT = (
+    "Введи текст рассылки. Поддерживается HTML.\n"
+    "Чтобы прикрепить картинку — пришли её следующим сообщением (или нажми «Без медиа»).\n"
+    "Отмена: /cancel"
+)
+
+MEDIA_PROMPT = "📷 Пришли картинку или документ для прикрепления, либо «Без медиа»."
+
+LIST_UPLOAD_PROMPT = (
+    "📋 Пришли файл (.txt/.csv) со списком tg_id — по одному на строку,\n"
+    "или просто список через запятую/пробел/перенос строки в сообщении.\n"
+    "Отмена: /cancel"
+)
+
+
+def _text_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
+    ])
+
+
+def _media_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Без медиа", callback_data=BcCb(action="nomedia").pack())],
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
+    ])
+
+
+def _schedule_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Сейчас", callback_data=BcCb(action="sched", value="now").pack())],
+        [InlineKeyboardButton(text="🕒 +1 час", callback_data=BcCb(action="sched", value="+60").pack())],
+        [InlineKeyboardButton(text="🕒 +6 часов", callback_data=BcCb(action="sched", value="+360").pack())],
+        [InlineKeyboardButton(text="📅 Указать вручную (YYYY-MM-DD HH:MM)",
+                              callback_data=BcCb(action="sched", value="manual").pack())],
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
+    ])
+
+
+def _confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Поставить в очередь", callback_data=BcCb(action="enqueue").pack()),
+        InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu"),
+    ]])
+
+
+async def _render_menu(obj, state: FSMContext) -> None:
+    """Сворачивается в меню рассылок (из Message или CallbackQuery)."""
+    if isinstance(obj, Message):
+        await render_screen_msg(obj, state, MENU_TEXT, _menu_kb())
+    else:
+        await render_screen_call(obj, state, MENU_TEXT, _menu_kb())
+
+
 @router.callback_query(F.data == "adm:bc:menu")
 async def cb_menu(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await safe_edit(call, "📣 <b>Рассылки</b>", _menu_kb())
+    await _render_menu(call, state)
     await call.answer()
 
 
@@ -100,7 +166,7 @@ async def cb_new(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(BroadcastStates.audience)
     kb = await _audience_kb(call.from_user.id)
-    await safe_edit(call, "Кому отправляем?", kb)
+    await render_screen_call(call, state, "Кому отправляем?", kb)
     await call.answer()
 
 
@@ -138,7 +204,7 @@ async def cb_audience(call: CallbackQuery, callback_data: BcCb, state: FSMContex
         rows = [[InlineKeyboardButton(text=c.name, callback_data=BcCb(action="chain", value=c.name).pack())]
                 for c in chains[:30]]
         rows.append([InlineKeyboardButton(text="← Назад", callback_data=BcCb(action="new").pack())])
-        await safe_edit(call, "Выбери сеть:", InlineKeyboardMarkup(inline_keyboard=rows))
+        await render_screen_call(call, state, "Выбери сеть:", InlineKeyboardMarkup(inline_keyboard=rows))
     elif kind == "shops":
         scope = await visible_shop_ids(call.from_user.id)
         shops, _ = await list_shops_scoped(scope, limit=30, offset=0)
@@ -152,11 +218,7 @@ async def cb_audience(call: CallbackQuery, callback_data: BcCb, state: FSMContex
             await call.answer("Только супер-админ", show_alert=True)
             return
         await state.set_state(BroadcastStates.audience_list_upload)
-        await call.message.answer(
-            "📋 Пришли файл (.txt/.csv) со списком tg_id — по одному на строку,\n"
-            "или просто список через запятую/пробел/перенос строки в сообщении.\n"
-            "Отмена: /cancel",
-        )
+        await render_screen_call(call, state, LIST_UPLOAD_PROMPT, _menu_cancel_kb())
     await call.answer()
 
 
@@ -184,48 +246,47 @@ def _parse_tg_ids(raw: str) -> tuple[list[int], int]:
 async def _accept_tg_ids(message: Message, state: FSMContext, raw: str) -> None:
     ids, bad = _parse_tg_ids(raw)
     if not ids:
-        await message.answer("Не нашёл ни одного валидного tg_id. Повтори.")
+        await render_screen_msg(
+            message, state,
+            "Не нашёл ни одного валидного tg_id. Повтори.",
+            _menu_cancel_kb(),
+        )
         return
     await state.update_data(audience={"kind": "list", "tg_ids": ids})
     skip_label = f", пропущено невалидных: {bad}" if bad else ""
-    await message.answer(f"✅ Получено {len(ids)} tg_id{skip_label}.")
-    await _go_text_msg(message, state)
-
-
-async def _go_text_msg(message: Message, state: FSMContext) -> None:
-    await state.set_state(BroadcastStates.text)
-    await message.answer(
-        "Введи текст рассылки. Поддерживается HTML.\n"
-        "Чтобы прикрепить картинку — пришли её следующим сообщением (или нажми «Без медиа»).\n"
-        "Отмена: /cancel",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu"),
-        ]]),
-    )
+    await _go_text_msg(message, state, note=f"✅ Получено {len(ids)} tg_id{skip_label}.\n\n")
 
 
 @router.message(BroadcastStates.audience_list_upload, F.text == "/cancel")
 async def msg_list_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Отменено.")
+    await _render_menu(message, state)
 
 
 @router.message(BroadcastStates.audience_list_upload, F.document)
 async def msg_list_doc(message: Message, state: FSMContext) -> None:
     if not await is_super_admin(message.from_user.id):
         await state.clear()
-        await message.answer("Нет доступа.")
+        await _render_menu(message, state)
         return
     doc = message.document
     if doc.file_size and doc.file_size > 2 * 1024 * 1024:
-        await message.answer("Файл слишком большой (>2 МБ).")
+        await render_screen_msg(
+            message, state,
+            "Файл слишком большой (>2 МБ).",
+            _menu_cancel_kb(),
+        )
         return
     try:
         buf = await message.bot.download(doc)
         raw = buf.read().decode("utf-8", errors="replace")
     except Exception:
         log.exception("download tg_id list failed")
-        await message.answer("Не смог скачать файл, повтори.")
+        await render_screen_msg(
+            message, state,
+            "Не смог скачать файл, повтори.",
+            _menu_cancel_kb(),
+        )
         return
     await _accept_tg_ids(message, state, raw)
 
@@ -234,7 +295,7 @@ async def msg_list_doc(message: Message, state: FSMContext) -> None:
 async def msg_list_text(message: Message, state: FSMContext) -> None:
     if not await is_super_admin(message.from_user.id):
         await state.clear()
-        await message.answer("Нет доступа.")
+        await _render_menu(message, state)
         return
     await _accept_tg_ids(message, state, message.text)
 
@@ -259,8 +320,8 @@ async def _render_shop_picker(call, state: FSMContext, shops) -> None:
     rows.append([InlineKeyboardButton(text=f"➡️ Дальше (выбрано {len(selected)})",
                                       callback_data=BcCb(action="shopsdone").pack())])
     rows.append([InlineKeyboardButton(text="← Назад", callback_data=BcCb(action="new").pack())])
-    await safe_edit(call, "Отметь магазины (тап = переключить):",
-                    InlineKeyboardMarkup(inline_keyboard=rows))
+    await render_screen_call(call, state, "Отметь магазины (тап = переключить):",
+                             InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(BroadcastStates.audience, BcCb.filter(F.action == "tog"))
@@ -278,7 +339,7 @@ async def cb_shop_toggle(call: CallbackQuery, callback_data: BcCb, state: FSMCon
         selected.append(shop_id)
     await state.update_data(shop_ids=selected)
     scope = await visible_shop_ids(call.from_user.id)
-    shops = await list_shops_scoped(scope, limit=30, offset=0, search=None, active_only=True)
+    shops, _ = await list_shops_scoped(scope, limit=30, offset=0)
     await _render_shop_picker(call, state, shops)
     await call.answer()
 
@@ -299,21 +360,18 @@ async def cb_shops_done(call: CallbackQuery, state: FSMContext) -> None:
 
 async def _go_text(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(BroadcastStates.text)
-    await safe_edit(
-        call,
-        "Введи текст рассылки. Поддерживается HTML.\n"
-        "Чтобы прикрепить картинку — пришли её следующим сообщением (или нажми «Без медиа»).\n"
-        "Отмена: /cancel",
-        InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu"),
-        ]]),
-    )
+    await render_screen_call(call, state, TEXT_PROMPT, _text_cancel_kb())
+
+
+async def _go_text_msg(message: Message, state: FSMContext, note: str = "") -> None:
+    await state.set_state(BroadcastStates.text)
+    await render_screen_msg(message, state, note + TEXT_PROMPT, _text_cancel_kb())
 
 
 @router.message(BroadcastStates.text, F.text == "/cancel")
 async def msg_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer("Отменено.")
+    await _render_menu(message, state)
 
 
 @router.message(BroadcastStates.text, F.text)
@@ -321,13 +379,7 @@ async def msg_text(message: Message, state: FSMContext) -> None:
     text = message.html_text
     await state.update_data(text=text, photo=None, document=None)
     await state.set_state(BroadcastStates.media)
-    await message.answer(
-        "📷 Пришли картинку или документ для прикрепления, либо «Без медиа».",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚫 Без медиа", callback_data=BcCb(action="nomedia").pack())],
-            [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
-        ]),
-    )
+    await render_screen_msg(message, state, MEDIA_PROMPT, _media_kb())
 
 
 @router.message(BroadcastStates.media, F.photo)
@@ -346,24 +398,18 @@ async def msg_doc(message: Message, state: FSMContext) -> None:
 @router.callback_query(BroadcastStates.media, BcCb.filter(F.action == "nomedia"))
 async def cb_no_media(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(photo=None, document=None)
-    await _go_schedule(call.message, state)
+    await _go_schedule(call, state)
     await call.answer()
 
 
 # ---------- schedule ----------
 
-async def _go_schedule(message_like, state: FSMContext) -> None:
+async def _go_schedule(obj, state: FSMContext) -> None:
     await state.set_state(BroadcastStates.schedule)
-    rows = [
-        [InlineKeyboardButton(text="🚀 Сейчас", callback_data=BcCb(action="sched", value="now").pack())],
-        [InlineKeyboardButton(text="🕒 +1 час", callback_data=BcCb(action="sched", value="+60").pack())],
-        [InlineKeyboardButton(text="🕒 +6 часов", callback_data=BcCb(action="sched", value="+360").pack())],
-        [InlineKeyboardButton(text="📅 Указать вручную (YYYY-MM-DD HH:MM)",
-                              callback_data=BcCb(action="sched", value="manual").pack())],
-        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu")],
-    ]
-    if hasattr(message_like, "answer"):
-        await message_like.answer("Когда отправить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    if isinstance(obj, Message):
+        await render_screen_msg(obj, state, "Когда отправить?", _schedule_kb())
+    else:
+        await render_screen_call(obj, state, "Когда отправить?", _schedule_kb())
 
 
 @router.callback_query(BroadcastStates.schedule, BcCb.filter(F.action == "sched"))
@@ -373,8 +419,10 @@ async def cb_schedule(call: CallbackQuery, callback_data: BcCb, state: FSMContex
         await state.update_data(scheduled_at=None)
         await _go_confirm(call, state)
     elif val == "manual":
-        await call.message.answer(
+        await render_screen_call(
+            call, state,
             "Введи дату и время в формате <code>YYYY-MM-DD HH:MM</code> по Москве:",
+            _text_cancel_kb(),
         )
     elif val.startswith("+"):
         try:
@@ -393,15 +441,23 @@ async def msg_schedule_manual(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     if raw == "/cancel":
         await state.clear()
-        await message.answer("Отменено.")
+        await _render_menu(message, state)
         return
     try:
         when = datetime.strptime(raw, "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
     except ValueError:
-        await message.answer("Формат YYYY-MM-DD HH:MM. Повтори.")
+        await render_screen_msg(
+            message, state,
+            "Формат YYYY-MM-DD HH:MM. Повтори.",
+            _text_cancel_kb(),
+        )
         return
     if when <= datetime.now(TZ):
-        await message.answer("Время в прошлом. Введи будущее.")
+        await render_screen_msg(
+            message, state,
+            "Время в прошлом. Введи будущее.",
+            _text_cancel_kb(),
+        )
         return
     await state.update_data(scheduled_at=when.isoformat())
     await _go_confirm_msg(message, state)
@@ -455,26 +511,14 @@ async def _build_preview(state: FSMContext, actor_tg_id: int) -> tuple[str, dict
 
 async def _go_confirm(call: CallbackQuery, state: FSMContext) -> None:
     text, _ = await _build_preview(state, call.from_user.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Поставить в очередь",
-                             callback_data=BcCb(action="enqueue").pack()),
-        InlineKeyboardButton(text="✖️ Отмена",
-                             callback_data="adm:bc:menu"),
-    ]])
     await state.set_state(BroadcastStates.confirm)
-    await safe_edit(call, text, kb)
+    await render_screen_call(call, state, text, _confirm_kb())
 
 
 async def _go_confirm_msg(message: Message, state: FSMContext) -> None:
     text, _ = await _build_preview(state, message.from_user.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Поставить в очередь",
-                             callback_data=BcCb(action="enqueue").pack()),
-        InlineKeyboardButton(text="✖️ Отмена",
-                             callback_data="adm:bc:menu"),
-    ]])
     await state.set_state(BroadcastStates.confirm)
-    await message.answer(text, reply_markup=kb)
+    await render_screen_msg(message, state, text, _confirm_kb())
 
 
 @router.callback_query(BroadcastStates.confirm, BcCb.filter(F.action == "enqueue"))
@@ -496,7 +540,7 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
                 ),
                 InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu"),
             ]])
-            await safe_edit(call, f"{text}\n\n{warn}", kb)
+            await render_screen_call(call, state, f"{text}\n\n{warn}", kb)
             await call.answer()
             return
     _, info = await _build_preview(state, call.from_user.id)
@@ -520,8 +564,8 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
     )
     await state.clear()
     label = "Запущена" if not sched_dt else f"Запланирована на {sched_str}"
-    await safe_edit(
-        call,
+    await render_screen_call(
+        call, state,
         f"✅ Рассылка #{bc_id} {label.lower()} (≈{info['audience_size']} получателей).",
         InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📜 К истории", callback_data=BcCb(action="hist", value="0").pack())],

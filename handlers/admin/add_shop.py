@@ -4,14 +4,15 @@
        → price_start → price_step → description → photos → assign_admins
        → confirm.
 
-На каждом шаге показывается подсказка на русском, объясняющая, что это
-за поле, где оно увидится пользователю и можно ли его пропустить.
+Весь визард живёт в одном сообщении: нажатия и вводы превращают его в
+следующий шаг, ввод администратора сразу удаляется.
 """
 import html
 import logging
 from datetime import date, datetime
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -37,6 +38,7 @@ from keyboards.admin_kb import (
     skip_or_cancel_kb,
 )
 from services.audit import write as audit_write
+from services.chat_render import render
 from states.admin_states import AddShopStates
 
 log = logging.getLogger(__name__)
@@ -50,6 +52,9 @@ MAX_PHOTOS = 5
 # Время работы — свободный текст. Лимит нужен только чтобы карточка
 # не распухла; 100 символов хватает на «Пн-Сб 10:00–21:00, Вс выходной».
 MAX_WORKING_HOURS = 100
+
+# Пустая клавиатура: убирает inline-кнопки при превращении.
+EMPTY_KB = InlineKeyboardMarkup(inline_keyboard=[])
 
 
 # ---------- helper: step intros ----------
@@ -174,16 +179,44 @@ def _cancel_kb() -> InlineKeyboardMarkup:
     ]])
 
 
+# ---------- helpers: wizard-message transforms ----------
+
+async def _wizard_text(
+    message: Message, state: FSMContext, text: str, kb: InlineKeyboardMarkup,
+) -> None:
+    """Превращает текущий экран визарда в следующий; ввод удаляется."""
+    data = await state.get_data()
+    msg_id = data.get("wizard_msg_id")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    target = msg_id if msg_id is not None else message.message_id
+    new_id = await render(message.bot, message.chat.id, target, text, kb)
+    await state.update_data(wizard_msg_id=new_id)
+
+
+async def _wizard_error(
+    message: Message, state: FSMContext, text: str, kb: InlineKeyboardMarkup,
+) -> None:
+    """Ошибка на экране визарда; ввод НЕ удаляем (черновик остаётся у шага)."""
+    data = await state.get_data()
+    msg_id = data.get("wizard_msg_id")
+    target = msg_id if msg_id is not None else message.message_id
+    new_id = await render(message.bot, message.chat.id, target, text, kb)
+    await state.update_data(wizard_msg_id=new_id)
+
+
 # ---------- helpers: edit-mode → back to confirm ----------
 
 async def _maybe_back_to_confirm_msg(message: Message, state: FSMContext) -> bool:
-    """Если в edit-mode — отрисовать превью и вернуть True. Иначе False."""
+    """Если в edit-mode — отрисовать превью на месте шага и вернуть True."""
     data = await state.get_data()
     if not data.get("editing"):
         return False
     await state.update_data(editing=None)
     await state.set_state(AddShopStates.confirm)
-    await message.answer(_preview_text(data), reply_markup=confirm_kb("create"))
+    await _wizard_text(message, state, _preview_text(data), confirm_kb("create"))
     return True
 
 
@@ -193,7 +226,8 @@ async def _maybe_back_to_confirm_call(call: CallbackQuery, state: FSMContext) ->
         return False
     await state.update_data(editing=None)
     await state.set_state(AddShopStates.confirm)
-    await safe_edit(call, _preview_text(data), confirm_kb("create"))
+    new_id = await safe_edit(call, _preview_text(data), confirm_kb("create"))
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
     return True
 
@@ -204,14 +238,15 @@ async def _maybe_back_to_confirm_call(call: CallbackQuery, state: FSMContext) ->
 async def cb_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AddShopStates.name)
-    await call.message.answer(NAME_INTRO, reply_markup=_cancel_kb())
+    new_id = await safe_edit(call, NAME_INTRO, _cancel_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
 @router.callback_query(AdminCb.filter(F.action == "cancel"))
 async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await safe_edit(call, "Отменено. Магазин не создан.", None)
+    await safe_edit(call, "Отменено. Магазин не создан.", EMPTY_KB)
     await call.answer()
 
 
@@ -219,7 +254,8 @@ async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_restart(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AddShopStates.name)
-    await call.message.answer(NAME_INTRO, reply_markup=_cancel_kb())
+    new_id = await safe_edit(call, NAME_INTRO, _cancel_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer("Начали заново")
 
 
@@ -229,13 +265,13 @@ async def cb_restart(call: CallbackQuery, state: FSMContext) -> None:
 async def msg_name(message: Message, state: FSMContext) -> None:
     name = message.text.strip()
     if not (1 <= len(name) <= 120):
-        await message.answer("⚠️ Длина 1–120 символов. Повтори.")
+        await _wizard_error(message, state, "⚠️ Длина 1–120 символов. Повтори.", _cancel_kb())
         return
     await state.update_data(name=name)
     if await _maybe_back_to_confirm_msg(message, state):
         return
     await state.set_state(AddShopStates.address)
-    await message.answer(ADDRESS_INTRO, reply_markup=_cancel_kb())
+    await _wizard_text(message, state, ADDRESS_INTRO, _cancel_kb())
 
 
 # ---------- address ----------
@@ -244,13 +280,13 @@ async def msg_name(message: Message, state: FSMContext) -> None:
 async def msg_address(message: Message, state: FSMContext) -> None:
     addr = message.text.strip()
     if not (1 <= len(addr) <= 200):
-        await message.answer("⚠️ Длина 1–200 символов. Повтори.")
+        await _wizard_error(message, state, "⚠️ Длина 1–200 символов. Повтори.", _cancel_kb())
         return
     await state.update_data(address=addr)
     if await _maybe_back_to_confirm_msg(message, state):
         return
     await state.set_state(AddShopStates.working_hours)
-    await message.answer(WORKING_HOURS_INTRO, reply_markup=skip_or_cancel_kb())
+    await _wizard_text(message, state, WORKING_HOURS_INTRO, skip_or_cancel_kb())
 
 
 # ---------- working hours ----------
@@ -261,7 +297,8 @@ async def cb_working_hours_skip(call: CallbackQuery, state: FSMContext) -> None:
     if await _maybe_back_to_confirm_call(call, state):
         return
     await state.set_state(AddShopStates.chain)
-    await safe_edit(call, CHAIN_INTRO, chain_picker_kb())
+    new_id = await safe_edit(call, CHAIN_INTRO, chain_picker_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -269,8 +306,10 @@ async def cb_working_hours_skip(call: CallbackQuery, state: FSMContext) -> None:
 async def msg_working_hours(message: Message, state: FSMContext) -> None:
     text = message.text.strip()
     if len(text) > MAX_WORKING_HOURS:
-        await message.answer(
-            f"⚠️ Слишком длинно (макс {MAX_WORKING_HOURS}). Сократи и повтори."
+        await _wizard_error(
+            message, state,
+            f"⚠️ Слишком длинно (макс {MAX_WORKING_HOURS}). Сократи и повтори.",
+            skip_or_cancel_kb(),
         )
         return
     # Пустую строку трактуем как «нет данных», чтобы не пихать "" в БД.
@@ -278,7 +317,7 @@ async def msg_working_hours(message: Message, state: FSMContext) -> None:
     if await _maybe_back_to_confirm_msg(message, state):
         return
     await state.set_state(AddShopStates.chain)
-    await message.answer(CHAIN_INTRO, reply_markup=chain_picker_kb())
+    await _wizard_text(message, state, CHAIN_INTRO, chain_picker_kb())
 
 
 # ---------- chain ----------
@@ -290,7 +329,8 @@ async def cb_chain(call: CallbackQuery, callback_data: AdminCb, state: FSMContex
     if await _maybe_back_to_confirm_call(call, state):
         return
     await state.set_state(AddShopStates.cycle)
-    await safe_edit(call, CYCLE_INTRO, cycle_picker_kb())
+    new_id = await safe_edit(call, CYCLE_INTRO, cycle_picker_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -309,7 +349,10 @@ async def cb_cycle(call: CallbackQuery, callback_data: AdminCb, state: FSMContex
         return
     await state.set_state(AddShopStates.anchor)
     cycle_label = f"{cycle} дн." if cycle else "без цикла"
-    await safe_edit(call, ANCHOR_INTRO_TPL.format(cycle_label=cycle_label), anchor_picker_kb())
+    new_id = await safe_edit(
+        call, ANCHOR_INTRO_TPL.format(cycle_label=cycle_label), anchor_picker_kb()
+    )
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -333,10 +376,14 @@ async def cb_anchor_skip(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(AddShopStates.anchor, AdminCb.filter(F.action == "anchor_manual"))
 async def cb_anchor_manual(call: CallbackQuery, state: FSMContext) -> None:
-    await call.message.answer(
+    await state.set_state(AddShopStates.anchor)
+    new_id = await safe_edit(
+        call,
+        "📅 <b>Шаг 6/11 · Точка отсчёта</b>\n\n"
         "Введи дату последнего завоза в формате <b>YYYY-MM-DD</b> (например, 2026-04-22):",
-        reply_markup=_cancel_kb(),
+        _cancel_kb(),
     )
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -345,21 +392,30 @@ async def msg_anchor_input(message: Message, state: FSMContext) -> None:
     try:
         d = datetime.strptime(message.text.strip(), "%Y-%m-%d").date()
     except ValueError:
-        await message.answer("⚠️ Формат YYYY-MM-DD. Повтори (например, 2026-04-22).")
+        await _wizard_error(
+            message, state,
+            "⚠️ Формат YYYY-MM-DD. Повтори (например, 2026-04-22).",
+            _cancel_kb(),
+        )
         return
     if d > date.today():
-        await message.answer("⚠️ Дата завоза не может быть в будущем. Повтори.")
+        await _wizard_error(
+            message, state,
+            "⚠️ Дата завоза не может быть в будущем. Повтори.",
+            _cancel_kb(),
+        )
         return
     await state.update_data(anchor_date=d.isoformat())
     if await _maybe_back_to_confirm_msg(message, state):
         return
     await state.set_state(AddShopStates.price_start)
-    await message.answer(PRICE_START_INTRO, reply_markup=skip_or_cancel_kb())
+    await _wizard_text(message, state, PRICE_START_INTRO, skip_or_cancel_kb())
 
 
 async def _go_price_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddShopStates.price_start)
-    await safe_edit(call, PRICE_START_INTRO, skip_or_cancel_kb())
+    new_id = await safe_edit(call, PRICE_START_INTRO, skip_or_cancel_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -371,7 +427,8 @@ async def cb_price_start_skip(call: CallbackQuery, state: FSMContext) -> None:
     if await _maybe_back_to_confirm_call(call, state):
         return
     await state.set_state(AddShopStates.description)
-    await safe_edit(call, DESC_INTRO, skip_or_cancel_kb())
+    new_id = await safe_edit(call, DESC_INTRO, skip_or_cancel_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -381,10 +438,18 @@ async def msg_price_start(message: Message, state: FSMContext) -> None:
     try:
         v = int(raw)
     except ValueError:
-        await message.answer("⚠️ Это должно быть целое число. Повтори (например, 1200).")
+        await _wizard_error(
+            message, state,
+            "⚠️ Это должно быть целое число. Повтори (например, 1200).",
+            skip_or_cancel_kb(),
+        )
         return
     if not (0 <= v <= MAX_PRICE_START):
-        await message.answer(f"⚠️ Допустимо 0–{MAX_PRICE_START}. Повтори.")
+        await _wizard_error(
+            message, state,
+            f"⚠️ Допустимо 0–{MAX_PRICE_START}. Повтори.",
+            skip_or_cancel_kb(),
+        )
         return
     await state.update_data(price_start=v)
     # В edit-mode для price_start: если шаг ещё не выставлен, попросим и его
@@ -394,7 +459,7 @@ async def msg_price_start(message: Message, state: FSMContext) -> None:
         if await _maybe_back_to_confirm_msg(message, state):
             return
     await state.set_state(AddShopStates.price_step)
-    await message.answer(PRICE_STEP_INTRO, reply_markup=skip_or_cancel_kb())
+    await _wizard_text(message, state, PRICE_STEP_INTRO, skip_or_cancel_kb())
 
 
 # ---------- price_step ----------
@@ -406,11 +471,12 @@ async def cb_price_step_skip(call: CallbackQuery, state: FSMContext) -> None:
     if await _maybe_back_to_confirm_call(call, state):
         return
     await state.set_state(AddShopStates.description)
-    await safe_edit(
+    new_id = await safe_edit(
         call,
         "ℹ️ Без шага цена не считается, оба поля сброшены — добавишь позже.\n\n" + DESC_INTRO,
         skip_or_cancel_kb(),
     )
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -420,16 +486,24 @@ async def msg_price_step(message: Message, state: FSMContext) -> None:
     try:
         v = int(raw)
     except ValueError:
-        await message.answer("⚠️ Целое число. Повтори (например, 80).")
+        await _wizard_error(
+            message, state,
+            "⚠️ Целое число. Повтори (например, 80).",
+            skip_or_cancel_kb(),
+        )
         return
     if not (0 <= v <= MAX_PRICE_STEP):
-        await message.answer(f"⚠️ Допустимо 0–{MAX_PRICE_STEP}. Повтори.")
+        await _wizard_error(
+            message, state,
+            f"⚠️ Допустимо 0–{MAX_PRICE_STEP}. Повтори.",
+            skip_or_cancel_kb(),
+        )
         return
     await state.update_data(price_step=v)
     if await _maybe_back_to_confirm_msg(message, state):
         return
     await state.set_state(AddShopStates.description)
-    await message.answer(DESC_INTRO, reply_markup=skip_or_cancel_kb())
+    await _wizard_text(message, state, DESC_INTRO, skip_or_cancel_kb())
 
 
 # ---------- description ----------
@@ -446,27 +520,34 @@ async def cb_desc_skip(call: CallbackQuery, state: FSMContext) -> None:
 async def msg_description(message: Message, state: FSMContext) -> None:
     desc = message.text.strip()
     if len(desc) > 2000:
-        await message.answer("⚠️ Слишком длинно (макс 2000). Сократи и повтори.")
+        await _wizard_error(
+            message, state,
+            "⚠️ Слишком длинно (макс 2000). Сократи и повтори.",
+            skip_or_cancel_kb(),
+        )
         return
     await state.update_data(description=desc)
     if await _maybe_back_to_confirm_msg(message, state):
         return
-    await _go_photos_msg(message, state)
+    await state.set_state(AddShopStates.photos)
+    await _wizard_text(message, state, PHOTOS_INTRO, photos_done_kb())
 
 
 # ---------- photos ----------
 
+def _photos_status(n: int) -> str:
+    status = f"✅ Загружено: {n}/{MAX_PHOTOS}"
+    if n > 0:
+        status += f"\n\n<i>Прислать ещё или жми «Готово».</i>" if n < MAX_PHOTOS else "\n\n⚠️ <b>Лимит.</b> Жми «Готово»."
+    return f"{PHOTOS_INTRO}\n\n{status}"
+
+
 async def _go_photos(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(photo_file_ids=[])
     await state.set_state(AddShopStates.photos)
-    await safe_edit(call, PHOTOS_INTRO, photos_done_kb())
+    new_id = await safe_edit(call, PHOTOS_INTRO, photos_done_kb())
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
-
-
-async def _go_photos_msg(message: Message, state: FSMContext) -> None:
-    await state.update_data(photo_file_ids=[])
-    await state.set_state(AddShopStates.photos)
-    await message.answer(PHOTOS_INTRO, reply_markup=photos_done_kb())
 
 
 @router.message(AddShopStates.photos, F.photo)
@@ -474,24 +555,52 @@ async def msg_photo(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     photos: list[str] = list(data.get("photo_file_ids") or [])
     if len(photos) >= MAX_PHOTOS:
-        await message.answer(f"⚠️ Достигнут лимит ({MAX_PHOTOS}). Жми «Готово / дальше».")
+        # Фото не засчитываем, сам ввод удаляем, экран предупреждает.
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        msg_id = data.get("wizard_msg_id")
+        new_id = await render(
+            message.bot, message.chat.id,
+            msg_id if msg_id is not None else message.message_id,
+            f"⚠️ <b>Достигнут лимит ({MAX_PHOTOS}).</b>\n\n" + _photos_status(len(photos)),
+            photos_done_kb(),
+        )
+        await state.update_data(wizard_msg_id=new_id)
         return
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     photos.append(message.photo[-1].file_id)
     await state.update_data(photo_file_ids=photos)
-    await message.answer(
-        f"✅ Загружено {len(photos)}/{MAX_PHOTOS}. "
-        f"{'Можешь прислать ещё или жми «Готово».' if len(photos) < MAX_PHOTOS else 'Лимит. Жми «Готово».'}",
-        reply_markup=photos_done_kb(),
+    msg_id = data.get("wizard_msg_id")
+    new_id = await render(
+        message.bot, message.chat.id,
+        msg_id if msg_id is not None else message.message_id,
+        _photos_status(len(photos)),
+        photos_done_kb(),
     )
+    await state.update_data(wizard_msg_id=new_id)
 
 
 @router.message(AddShopStates.photos, F.text)
 async def msg_photo_wrong_text(message: Message, state: FSMContext) -> None:
-    await message.answer(
-        "Тут жду фотографии (как обычное фото в Telegram), а не текст.\n"
-        "Если фото не нужны — жми «Без фото» на клавиатуре выше.",
-        reply_markup=photos_done_kb(),
+    data = await state.get_data()
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+    msg_id = data.get("wizard_msg_id")
+    new_id = await render(
+        message.bot, message.chat.id,
+        msg_id if msg_id is not None else message.message_id,
+        "📷 <b>Тут жду фотографии</b> (как обычное фото в Telegram).\n"
+        "Если фото не нужны — жми «Готово / дальше» → «Без фото».",
+        photos_done_kb(),
     )
+    await state.update_data(wizard_msg_id=new_id)
 
 
 @router.callback_query(AddShopStates.photos, AdminCb.filter(F.action == "photos_skip"))
@@ -539,7 +648,8 @@ async def _go_assign(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(assigned_admin_ids=[])
     await state.set_state(AddShopStates.assign_admins)
     kb = await _render_assign_kb(set())
-    await safe_edit(call, ASSIGN_INTRO, kb)
+    new_id = await safe_edit(call, ASSIGN_INTRO, kb)
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
@@ -659,57 +769,57 @@ async def cb_edit_field(call: CallbackQuery, callback_data: AdminCb, state: FSMC
 
     if field == "name":
         await state.set_state(AddShopStates.name)
-        await call.message.answer(NAME_INTRO, reply_markup=_cancel_kb())
+        new_id = await safe_edit(call, NAME_INTRO, _cancel_kb())
     elif field == "address":
         await state.set_state(AddShopStates.address)
-        await call.message.answer(ADDRESS_INTRO, reply_markup=_cancel_kb())
+        new_id = await safe_edit(call, ADDRESS_INTRO, _cancel_kb())
     elif field == "working_hours":
         await state.set_state(AddShopStates.working_hours)
-        await call.message.answer(WORKING_HOURS_INTRO, reply_markup=skip_or_cancel_kb())
+        new_id = await safe_edit(call, WORKING_HOURS_INTRO, skip_or_cancel_kb())
     elif field == "chain":
         await state.set_state(AddShopStates.chain)
-        await call.message.answer(CHAIN_INTRO, reply_markup=chain_picker_kb())
+        new_id = await safe_edit(call, CHAIN_INTRO, chain_picker_kb())
     elif field == "cycle":
         await state.set_state(AddShopStates.cycle)
-        await call.message.answer(CYCLE_INTRO, reply_markup=cycle_picker_kb())
+        new_id = await safe_edit(call, CYCLE_INTRO, cycle_picker_kb())
     elif field == "anchor":
         cycle = (await state.get_data()).get("cycle_length")
         cycle_label = f"{cycle} дн." if cycle else "без цикла"
         await state.set_state(AddShopStates.anchor)
-        await call.message.answer(
+        new_id = await safe_edit(
+            call,
             ANCHOR_INTRO_TPL.format(cycle_label=cycle_label),
-            reply_markup=anchor_picker_kb(),
+            anchor_picker_kb(),
         )
     elif field == "price_start":
         await state.set_state(AddShopStates.price_start)
-        await call.message.answer(PRICE_START_INTRO, reply_markup=skip_or_cancel_kb())
+        new_id = await safe_edit(call, PRICE_START_INTRO, skip_or_cancel_kb())
     elif field == "price_step":
         # шаг без цены смысла не имеет — если price_start пустой, перебросим на price_start
         if (await state.get_data()).get("price_start") is None:
             await call.answer("Сначала заполни цену в день завоза", show_alert=True)
             await state.set_state(AddShopStates.price_start)
-            await call.message.answer(PRICE_START_INTRO, reply_markup=skip_or_cancel_kb())
+            new_id = await safe_edit(call, PRICE_START_INTRO, skip_or_cancel_kb())
+            await state.update_data(wizard_msg_id=new_id)
             return
         await state.set_state(AddShopStates.price_step)
-        await call.message.answer(PRICE_STEP_INTRO, reply_markup=skip_or_cancel_kb())
+        new_id = await safe_edit(call, PRICE_STEP_INTRO, skip_or_cancel_kb())
     elif field == "description":
         await state.set_state(AddShopStates.description)
-        await call.message.answer(DESC_INTRO, reply_markup=skip_or_cancel_kb())
+        new_id = await safe_edit(call, DESC_INTRO, skip_or_cancel_kb())
     elif field == "photos":
         await state.update_data(photo_file_ids=[])
         await state.set_state(AddShopStates.photos)
-        await call.message.answer(
-            "📷 Старые фото сброшены. " + PHOTOS_INTRO,
-            reply_markup=photos_done_kb(),
-        )
+        new_id = await safe_edit(call, "📷 Старые фото сброшены. " + PHOTOS_INTRO, photos_done_kb())
     elif field == "assign":
         await state.update_data(assigned_admin_ids=[])
         await state.set_state(AddShopStates.assign_admins)
         kb = await _render_assign_kb(set())
-        await call.message.answer(ASSIGN_INTRO, reply_markup=kb)
+        new_id = await safe_edit(call, ASSIGN_INTRO, kb)
     else:
         await call.answer("Неизвестное поле", show_alert=True)
         return
+    await state.update_data(wizard_msg_id=new_id)
     await call.answer()
 
 
