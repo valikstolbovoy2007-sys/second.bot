@@ -29,6 +29,24 @@ from states.feedback_states import FeedbackStates
 log = logging.getLogger(__name__)
 router = Router(name="feedback")
 
+# Ширина бабла превью задаётся текстом, а кнопки растягиваются под бабл.
+# Паддинг пробелами + zero-width joiner не даёт Telegram обрезать хвостовые
+# пробелы и «разгоняет» превью до ширины двух кнопок «Отправить»/«Удалить».
+_ZWJ = "\u200d"
+_PREVIEW_PAD = 20
+
+
+def _pad_to_width(text: str, width: int = _PREVIEW_PAD) -> str:
+    """Довести видимую длину строки до width символов (для превью репорта)."""
+    if len(text) < width:
+        text += " " * (width - len(text)) + _ZWJ
+    return text
+
+
+def _report_preview(stored_text: str) -> str:
+    line = _pad_to_width((stored_text or "…").replace("\n", " "))
+    return f"✉️ <b>Ваше сообщение:</b>\n<pre>{html.escape(line)}</pre>"
+
 
 def _report_cancel_kb() -> InlineKeyboardMarkup:
     """Кнопка «Отмена» на экране-прашивании «Исправить неточность»: возвращает
@@ -271,7 +289,7 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
         await state.set_state(FeedbackStates.confirm)
         await render(
             bot, message.chat.id, data["report_msg_id"],
-            f"✉️ <b>Ваше сообщение:</b>\n{html.escape(stored_text)}",
+            _report_preview(stored_text),
             _report_confirm_kb(),
         )
         return
