@@ -267,13 +267,15 @@ async def cb_search_start(
     call: CallbackQuery, callback_data: CatalogCb, state: FSMContext,
 ) -> None:
     await state.set_state(CatalogStates.searching)
-    await state.update_data(
-        cat_flt=callback_data.flt, cat_sort=callback_data.sort,
-    )
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("catalog.search.prompt"),
         search_cancel_kb(callback_data.flt, callback_data.sort),
+    )
+    await state.update_data(
+        cat_flt=callback_data.flt,
+        cat_sort=callback_data.sort,
+        search_msg_id=new_id,
     )
     await call.answer()
 
@@ -285,8 +287,8 @@ async def msg_search_cancel(message: Message, state: FSMContext) -> None:
     sort = _norm_sort(data.get("cat_sort", SORT_NAME))
     await state.clear()
     _user_search.pop(message.from_user.id, None)
-    # Re-open catalog as a fresh message (no callback context here).
-    await _render_after_text(message, flt=flt, sort=sort)
+    # Ввод пользователя удаляется, экран поиска снова становится каталогом.
+    await _render_search_result(message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"))
 
 
 @router.message(CatalogStates.searching, F.text)
@@ -300,39 +302,25 @@ async def msg_search_query(message: Message, state: FSMContext) -> None:
         _user_search.pop(message.from_user.id, None)
     else:
         _user_search[message.from_user.id] = query
-    await _render_after_text(message, flt=flt, sort=sort)
+    # Ввод пользователя удаляется, экран поиска снова становится каталогом
+    # уже с применённым поиском.
+    await _render_search_result(message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"))
 
 
-async def _render_after_text(message: Message, *, flt: str, sort: str) -> None:
-    """Render catalog after a text message (no callback to edit — send new)."""
+async def _render_search_result(
+    message: Message, *, flt: str, sort: str, prompt_msg_id: int | None,
+) -> None:
+    """Удалить ввод пользователя и на месте промпта нарисовать каталог."""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
-    today = date.today()
-    search = _user_search.get(message.from_user.id, "")
-    all_shops = await list_active_shops()
-    sub_ids = await subscribed_shop_ids(user_id)
-    filtered = apply(
-        all_shops, today, flt=flt, sort=sort, search=search, subscribed_ids=sub_ids,
-    )
-    total = len(filtered)
-    if total == 0:
-        body = await t(
-            "catalog.empty_filter" if (flt != FLT_ALL or search) else "catalog.empty"
-        )
-        await message.answer(
-            body, reply_markup=empty_filter_kb(flt, has_search=bool(search))
-        )
-        return
-    page = 0
-    page_shops = filtered[: PAGE_SIZE]
-    markers = _phase_markers(page_shops, today)
-    body = await _build_header(total=total, flt=flt, sort=sort, search=search)
-    kb = catalog_kb(
-        page_shops, page, flt, sort, total,
-        has_search=bool(search),
-        phase_markers=markers,
-        tracked_ids=sub_ids,
-    )
-    await message.answer(body, reply_markup=kb)
+    body, kb = await _catalog_payload(user_id, page=0, flt=flt, sort=sort)
+    if prompt_msg_id is not None:
+        await render(message.bot, message.chat.id, prompt_msg_id, body, kb)
+    else:
+        await message.answer(body, reply_markup=kb, disable_web_page_preview=True)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))
