@@ -49,6 +49,11 @@ async def render(
         # отправляем текст заново и удаляем старое сообщение.
         if "there is no text in the message to edit" in str(exc):
             return await _teleport(bot, chat_id, message_id, text, reply_markup, edit_kwargs)
+        # Цель — сообщение, которое редактировать нельзя (в т.ч. сообщение
+        # пользователя, например сам /feedback или /cancel): удаляем и шлём
+        # заново — так команда-вход тоже уходит без мусора.
+        if "message can't be edited" in str(exc) or "message is too old" in str(exc):
+            return await _teleport(bot, chat_id, message_id, text, reply_markup, edit_kwargs)
         raise
 
 
