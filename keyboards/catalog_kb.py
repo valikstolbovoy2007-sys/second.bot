@@ -218,7 +218,7 @@ def search_cancel_kb(flt: str, sort: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="✖️ Отмена",
-            callback_data=CatalogCb(action="list", flt=flt, sort=sort).pack(),
+            callback_data=CatalogCb(action="search_cancel", flt=flt, sort=sort).pack(),
         ),
     ]])
 

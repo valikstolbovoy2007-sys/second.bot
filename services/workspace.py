@@ -11,6 +11,7 @@
 class Workspace:
     def __init__(self) -> None:
         self._card: dict[int, int] = {}
+        self._help: dict[int, int] = {}
 
     def open_card(self, user_id: int, message_id: int) -> None:
         self._card[user_id] = message_id
@@ -20,6 +21,15 @@ class Workspace:
 
     def close_card(self, user_id: int) -> None:
         self._card.pop(user_id, None)
+
+    def open_help(self, user_id: int, message_id: int) -> None:
+        self._help[user_id] = message_id
+
+    def help_screen(self, user_id: int) -> int | None:
+        return self._help.get(user_id)
+
+    def pop_help(self, user_id: int) -> None:
+        self._help.pop(user_id, None)
 
 
 ws = Workspace()

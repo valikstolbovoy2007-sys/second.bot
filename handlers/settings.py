@@ -20,6 +20,7 @@ from keyboards.settings_kb import (
 )
 from services.chat_render import render
 from services.texts import t
+from services.workspace import ws
 
 log = logging.getLogger(__name__)
 router = Router(name="settings")
@@ -35,6 +36,7 @@ async def _settings_text(pause_until: date | None) -> str:
 
 
 async def _render_settings(call: CallbackQuery) -> None:
+    ws.pop_help(call.from_user.id)
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     s = await get_settings(user_id)
     assert s is not None

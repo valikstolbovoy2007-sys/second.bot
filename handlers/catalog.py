@@ -62,14 +62,17 @@ def _norm_sort(sort: str) -> str:
 async def _build_header(
     *, total: int, flt: str, sort: str, search: str,
 ) -> str:
-    parts = [await t("catalog.title"), await t("catalog.found", count=total)]
+    parts: list[str] = []
+    if search:
+        parts.append(f'🔍 <b>Результаты по поиску:</b> «{html.escape(search)}»')
+    else:
+        parts.append(await t("catalog.title"))
+    parts.append(await t("catalog.found", count=total))
     chips: list[str] = []
     if flt in FILTER_SHORT:
         chips.append(FILTER_SHORT[flt])
     if sort != SORT_NAME:
         chips.append(f"↕ {SORT_LABELS[sort]}")
-    if search:
-        chips.append(f"🔍 «{html.escape(search)}»")
     if chips:
         parts.append(" · ".join(chips))
     parts.append("")
@@ -153,6 +156,7 @@ async def _close_card_back_to_catalog(
 
 @router.callback_query(F.data == "catalog:open")
 async def cb_open(call: CallbackQuery) -> None:
+    ws.pop_help(call.from_user.id)
     await _render_catalog(call, page=0, flt=FLT_ALL, sort=SORT_NAME)
 
 
@@ -325,6 +329,18 @@ async def _render_search_result(
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))
 async def cb_search_clear(call: CallbackQuery, callback_data: CatalogCb) -> None:
+    _user_search.pop(call.from_user.id, None)
+    await _render_catalog(
+        call, page=0, flt=callback_data.flt, sort=callback_data.sort,
+    )
+
+
+@router.callback_query(CatalogCb.filter(F.action == "search_cancel"))
+async def cb_search_cancel(
+    call: CallbackQuery, callback_data: CatalogCb, state: FSMContext,
+) -> None:
+    """«✖️ Отмена» с промпта поиска: гасим состояние и возвращаем каталог."""
+    await state.clear()
     _user_search.pop(call.from_user.id, None)
     await _render_catalog(
         call, page=0, flt=callback_data.flt, sort=callback_data.sort,

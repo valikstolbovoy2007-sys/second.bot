@@ -68,6 +68,7 @@ async def _close_card_back_to_list(
 
 @router.callback_query(F.data == "my_shops:open")
 async def cb_open(call: CallbackQuery) -> None:
+    ws.pop_help(call.from_user.id)
     await _render_list(call, page=0)
 
 

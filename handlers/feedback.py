@@ -124,9 +124,24 @@ async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
     await state.set_state(FeedbackStates.pick_shop)
 
 
+async def _cleanup_help_screen(message: Message) -> None:
+    """/feedback и /cancel приходят в том числе с экрана «Помощь»: гасим его,
+    чтобы команда не оставляла меню помощи висеть. Best-effort."""
+    user_id = message.from_user.id
+    hid = ws.help_screen(user_id)
+    ws.pop_help(user_id)
+    if hid is None or hid == message.message_id:
+        return
+    try:
+        await message.bot.delete_message(message.chat.id, hid)
+    except TelegramBadRequest:
+        pass
+
+
 @router.message(Command("feedback"))
 async def cmd_feedback(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await _cleanup_help_screen(message)
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     await _ask_shop(message, state, user_id)
 
@@ -449,6 +464,7 @@ async def cb_report_discard(call: CallbackQuery, state: FSMContext) -> None:
 async def cmd_cancel_anywhere(message: Message, state: FSMContext) -> None:
     if await state.get_state() is None:
         # Сам /cancel превращается в инфо-строку, без нового бабла.
+        await _cleanup_help_screen(message)
         await render(message.bot, message.chat.id, message.message_id, "ℹ️ Нечего отменять.")
         return
     await state.clear()
