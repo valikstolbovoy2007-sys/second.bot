@@ -33,6 +33,12 @@ log = logging.getLogger(__name__)
 CAPTION_LIMIT = 1024
 
 
+def _tracked_active(call: CallbackQuery, message_id: int) -> int:
+    from services.workspace import ws
+    ws.set_active(call.from_user.id, message_id)
+    return message_id
+
+
 async def _resolve_photo_id(shop: Shop) -> str | None:
     photos = await list_photos(shop.id)
     return photos[0]["file_id"] if photos else None
@@ -100,7 +106,7 @@ async def show_shop_card(
         sent = await _resend_replace(msg, photo_id=photo_id, body=body, kb=kb)
         journal.drop_below(msg.chat.id, msg.message_id)
         journal.record(msg.chat.id, sent.message_id)
-        return sent.message_id
+        return _tracked_active(call, sent.message_id)
 
     if photo_id:
         if was_photo:
@@ -109,7 +115,7 @@ async def show_shop_card(
                     InputMediaPhoto(media=photo_id, caption=body),
                     reply_markup=kb,
                 )
-                return msg.message_id
+                return _tracked_active(call, msg.message_id)
             except TelegramBadRequest as exc:
                 if "message is not modified" in str(exc):
                     # caption + media + kb identical — also try a kb-only edit
@@ -117,22 +123,22 @@ async def show_shop_card(
                         await msg.edit_reply_markup(reply_markup=kb)
                     except TelegramBadRequest:
                         pass
-                    return msg.message_id
+                    return _tracked_active(call, msg.message_id)
                 # fall through: resend
                 log.debug("edit_media failed (%s), resending", exc)
         sent = await _resend_replace(msg, photo_id=photo_id, body=body, kb=kb)
-        return sent.message_id
+        return _tracked_active(call, sent.message_id)
 
     # No photo path
     if was_photo:
         sent = await _resend_replace(msg, photo_id=None, body=body, kb=kb)
-        return sent.message_id
+        return _tracked_active(call, sent.message_id)
     try:
         await msg.edit_text(body, reply_markup=kb, disable_web_page_preview=True)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             raise
-    return msg.message_id
+    return _tracked_active(call, msg.message_id)
 
 
 async def show_text_view(
@@ -146,13 +152,13 @@ async def show_text_view(
         sent = await _resend_replace(msg, photo_id=None, body=text, kb=kb)
         journal.drop_below(msg.chat.id, msg.message_id)
         journal.record(msg.chat.id, sent.message_id)
-        return sent.message_id
+        return _tracked_active(call, sent.message_id)
     if msg.photo:
         sent = await _resend_replace(msg, photo_id=None, body=text, kb=kb)
-        return sent.message_id
+        return _tracked_active(call, sent.message_id)
     try:
         await msg.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             raise
-    return msg.message_id
+    return _tracked_active(call, msg.message_id)

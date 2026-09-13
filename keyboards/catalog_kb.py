@@ -126,7 +126,7 @@ def catalog_kb(
     # Tools row: search + sort.
     rows.append([
         InlineKeyboardButton(
-            text="🔍 Поиск",
+            text="🔍 Изменить поиск" if has_search else "🔍 Поиск",
             callback_data=CatalogCb(action="search_start", flt=flt, sort=sort).pack(),
         ),
         InlineKeyboardButton(

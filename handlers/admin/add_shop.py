@@ -53,9 +53,6 @@ MAX_PHOTOS = 5
 # не распухла; 100 символов хватает на «Пн-Сб 10:00–21:00, Вс выходной».
 MAX_WORKING_HOURS = 100
 
-# Пустая клавиатура: убирает inline-кнопки при превращении.
-EMPTY_KB = InlineKeyboardMarkup(inline_keyboard=[])
-
 
 # ---------- helper: step intros ----------
 
@@ -246,8 +243,9 @@ async def cb_start(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(AdminCb.filter(F.action == "cancel"))
 async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await safe_edit(call, "Отменено. Магазин не создан.", EMPTY_KB)
-    await call.answer()
+    # Не оставляем тупиковый экран «Отменено» — возвращаемся в админ-панель.
+    from handlers.admin.panel import show_panel
+    await show_panel(call, state)
 
 
 @router.callback_query(AdminCb.filter(F.action == "restart"))

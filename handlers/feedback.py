@@ -17,12 +17,14 @@ from config import settings
 from data.repos.feedback_repo import save_feedback
 from data.repos.shops import get_shop
 from data.repos.subs import is_subscribed, list_subscribed
-from data.repos.users import upsert_user
+from data.repos.users import is_admin, upsert_user
 from keyboards.catalog_kb import CatalogCb, shop_card_kb
+from keyboards.main_kb import main_menu
 from services.catalog import FLT_ALL, SORT_NAME
 from services.card_view import send_shop_card, show_shop_card, show_text_view
-from services.chat_render import render
+from services.chat_render import render, render_focus
 from services.maps import yandex_maps_url
+from services.texts import t
 from services.workspace import ws
 from states.feedback_states import FeedbackStates
 
@@ -84,6 +86,17 @@ def _fb_confirm_kb() -> InlineKeyboardMarkup:
     ])
 
 
+async def _back_to_menu(call: CallbackQuery) -> None:
+    """Экран превращается в главное меню (после отмены/удаления фидбека)."""
+    admin = await is_admin(call.from_user.id)
+    new_id = await render(
+        call.bot, call.message.chat.id, call.message.message_id,
+        await t("start.welcome"),
+        await main_menu(is_admin=admin),
+    )
+    ws.set_active(call.from_user.id, new_id)
+
+
 def _fb_picker_kb(shops) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"🏪 {s.name}", callback_data=f"fb:shop:{s.id}")]
@@ -95,7 +108,8 @@ def _fb_picker_kb(shops) -> InlineKeyboardMarkup:
 
 
 async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
-    """/feedback: команда сама становится экраном выбора магазина (без новых баблов)."""
+    """/feedback: команда «фокусируется» на текущем экране (старое меню/помощь
+    превращается в пикер магазинов, ввод команды удаляется)."""
     shops, _total = await list_subscribed(user_id, limit=10, offset=0)
     if not shops:
         text = (
@@ -105,7 +119,7 @@ async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
             "\n"
             "<i>Отменить — /cancel</i>"
         )
-        new_id = await render(message.bot, message.chat.id, message.message_id, text)
+        new_id = await render_focus(message.bot, message, text)
         await state.update_data(fb_msg_id=new_id)
         await state.set_state(FeedbackStates.waiting_text)
         return
@@ -116,32 +130,16 @@ async def _ask_shop(message: Message, state: FSMContext, user_id: int) -> None:
         "К какому магазину относится сообщение?\n"
         "<i>Если ни к какому — выбери «Общее сообщение».</i>"
     )
-    new_id = await render(
-        message.bot, message.chat.id, message.message_id,
-        text, _fb_picker_kb(shops),
+    new_id = await render_focus(
+        message.bot, message, text, _fb_picker_kb(shops),
     )
     await state.update_data(fb_msg_id=new_id)
     await state.set_state(FeedbackStates.pick_shop)
 
 
-async def _cleanup_help_screen(message: Message) -> None:
-    """/feedback и /cancel приходят в том числе с экрана «Помощь»: гасим его,
-    чтобы команда не оставляла меню помощи висеть. Best-effort."""
-    user_id = message.from_user.id
-    hid = ws.help_screen(user_id)
-    ws.pop_help(user_id)
-    if hid is None or hid == message.message_id:
-        return
-    try:
-        await message.bot.delete_message(message.chat.id, hid)
-    except TelegramBadRequest:
-        pass
-
-
 @router.message(Command("feedback"))
 async def cmd_feedback(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await _cleanup_help_screen(message)
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     await _ask_shop(message, state, user_id)
 
@@ -165,6 +163,7 @@ async def cb_pick_shop(call: CallbackQuery, state: FSMContext) -> None:
         "<i>Отменить — /cancel</i>"
     )
     new_id = await render(call.bot, call.message.chat.id, call.message.message_id, text)
+    ws.set_active(call.from_user.id, new_id)
     await state.update_data(shop_id=shop.id, fb_msg_id=new_id)
     await state.set_state(FeedbackStates.waiting_text)
     await call.answer()
@@ -180,6 +179,7 @@ async def cb_noshop(call: CallbackQuery, state: FSMContext) -> None:
         "<i>Отменить — /cancel</i>"
     )
     new_id = await render(call.bot, call.message.chat.id, call.message.message_id, text)
+    ws.set_active(call.from_user.id, new_id)
     await state.update_data(shop_id=None, fb_msg_id=new_id)
     await state.set_state(FeedbackStates.waiting_text)
     await call.answer()
@@ -187,12 +187,9 @@ async def cb_noshop(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "fb:cancel")
 async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
-    """«Отмена» на пикере магазинов: экран удаляется, никаких новых баблов."""
+    """«Отмена» на пикере магазинов: экран превращается в главное меню."""
     await state.clear()
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    await _back_to_menu(call)
     await call.answer()
 
 
@@ -345,11 +342,12 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
             report_photo_id=photo_file_id,
         )
         await state.set_state(FeedbackStates.confirm)
-        await render(
+        new_id = await render(
             bot, message.chat.id, data["report_msg_id"],
             _report_preview(stored_text, is_photo),
             _report_confirm_kb(),
         )
+        ws.set_active(user_id, new_id)
         return
 
     # Обычный флоу (/feedback): прашивание превращается в превью.
@@ -360,17 +358,19 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
     )
     await state.set_state(FeedbackStates.confirm)
     if data.get("fb_msg_id") is not None:
-        await render(
+        new_id = await render(
             bot, message.chat.id, data["fb_msg_id"],
             _report_preview(stored_text, is_photo),
             _fb_confirm_kb(),
         )
     else:
-        await bot.send_message(
+        sent = await bot.send_message(
             message.chat.id,
             _report_preview(stored_text, is_photo),
             reply_markup=_fb_confirm_kb(),
         )
+        new_id = sent.message_id
+    ws.set_active(user_id, new_id)
 
 
 async def _notify_admin(
@@ -426,11 +426,9 @@ async def cb_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
 
 @router.callback_query(FeedbackStates.confirm, F.data == "fb:discard")
 async def cb_discard(call: CallbackQuery, state: FSMContext) -> None:
+    """«Удалить» на превью: черновик удаляется, вместо превью — главное меню."""
     await state.clear()
-    try:
-        await call.message.delete()
-    except TelegramBadRequest:
-        pass
+    await _back_to_menu(call)
     await call.answer("🗑 Удалено")
 
 
@@ -464,7 +462,6 @@ async def cb_report_discard(call: CallbackQuery, state: FSMContext) -> None:
 async def cmd_cancel_anywhere(message: Message, state: FSMContext) -> None:
     if await state.get_state() is None:
         # Сам /cancel превращается в инфо-строку, без нового бабла.
-        await _cleanup_help_screen(message)
         await render(message.bot, message.chat.id, message.message_id, "ℹ️ Нечего отменять.")
         return
     await state.clear()

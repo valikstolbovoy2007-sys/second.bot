@@ -140,10 +140,11 @@ async def _close_card_back_to_catalog(
     """«Назад» с карточки: список появляется, затем карточка удаляется."""
     ws.close_card(user_id)
     body, kb = await _catalog_payload(user_id, page=page, flt=flt, sort=sort)
-    await call.bot.send_message(
+    sent = await call.bot.send_message(
         call.message.chat.id, body,
         reply_markup=kb, disable_web_page_preview=True,
     )
+    ws.set_active(user_id, sent.message_id)
     try:
         await call.message.delete()
     except TelegramBadRequest:
@@ -156,7 +157,9 @@ async def _close_card_back_to_catalog(
 
 @router.callback_query(F.data == "catalog:open")
 async def cb_open(call: CallbackQuery) -> None:
-    ws.pop_help(call.from_user.id)
+    # Явное открытие каталога из главного меню — всегда «свежий» каталог:
+    # старый поиск сбрасываем, чтобы не тащить его в новые заходы.
+    _user_search.pop(call.from_user.id, None)
     await _render_catalog(call, page=0, flt=FLT_ALL, sort=SORT_NAME)
 
 
@@ -236,11 +239,12 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
 
 @router.callback_query(CatalogCb.filter(F.action == "more"))
 async def cb_more(call: CallbackQuery, callback_data: CatalogCb) -> None:
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("catalog.more_title"),
         more_filters_kb(callback_data.flt, callback_data.sort),
     )
+    ws.set_active(call.from_user.id, new_id)
     await call.answer()
 
 
@@ -249,11 +253,12 @@ async def cb_more(call: CallbackQuery, callback_data: CatalogCb) -> None:
 
 @router.callback_query(CatalogCb.filter(F.action == "sort_open"))
 async def cb_sort_open(call: CallbackQuery, callback_data: CatalogCb) -> None:
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("catalog.sort_title"),
         sort_kb(callback_data.flt, callback_data.sort),
     )
+    ws.set_active(call.from_user.id, new_id)
     await call.answer()
 
 
@@ -276,6 +281,7 @@ async def cb_search_start(
         await t("catalog.search.prompt"),
         search_cancel_kb(callback_data.flt, callback_data.sort),
     )
+    ws.set_active(call.from_user.id, new_id)
     await state.update_data(
         cat_flt=callback_data.flt,
         cat_sort=callback_data.sort,
@@ -322,9 +328,11 @@ async def _render_search_result(
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     body, kb = await _catalog_payload(user_id, page=0, flt=flt, sort=sort)
     if prompt_msg_id is not None:
-        await render(message.bot, message.chat.id, prompt_msg_id, body, kb)
+        new_id = await render(message.bot, message.chat.id, prompt_msg_id, body, kb)
     else:
-        await message.answer(body, reply_markup=kb, disable_web_page_preview=True)
+        sent = await message.answer(body, reply_markup=kb, disable_web_page_preview=True)
+        new_id = sent.message_id
+    ws.set_active(user_id, new_id)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))

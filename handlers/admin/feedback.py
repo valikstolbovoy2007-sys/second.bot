@@ -320,14 +320,18 @@ async def cb_reply_send(call: CallbackQuery, callback_data: FbCb, state: FSMCont
     parts.append("💬 <b>Ответ админа:</b>")
     parts.append("")
     parts.append(reply_text)
-    try:
-        await bot.send_message(target["tg_id"], "\n".join(parts))
-    except Exception as exc:
-        log.exception("feedback reply failed")
-        await state.set_state(FbStates.confirm)
-        await safe_edit(call, _reply_preview(reply_text), _reply_confirm_kb())
-        await call.answer(f"❌ Не отправилось: {html.escape(str(exc))[:80]}", show_alert=True)
-        return
+    # Если отвечаем на фидбек в собственный Telegram-аккаунт (self-test) —
+    # отдельное сообщение не дублируем: сочным ответ уже виден в блоке
+    # «Ответы» перерисованного меню фидбека. Так в чате остаётся только меню.
+    if target["tg_id"] != call.from_user.id:
+        try:
+            await bot.send_message(target["tg_id"], "\n".join(parts))
+        except Exception as exc:
+            log.exception("feedback reply failed")
+            await state.set_state(FbStates.confirm)
+            await safe_edit(call, _reply_preview(reply_text), _reply_confirm_kb())
+            await call.answer(f"❌ Не отправилось: {html.escape(str(exc))[:80]}", show_alert=True)
+            return
     async with pool().acquire() as conn:
         await conn.execute(
             "INSERT INTO admin_messages (from_tg_id, to_tg_id, text, feedback_id) VALUES ($1,$2,$3,$4)",

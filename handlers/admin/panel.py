@@ -10,6 +10,7 @@ from handlers.admin.feedback import FbCb
 from handlers.admin.filters import IsAdmin
 from handlers.admin.shops import ShopCb
 from handlers.admin.ui import safe_edit
+from services.chat_render import render_focus
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_panel")
@@ -53,7 +54,18 @@ def _panel_text(role: str) -> str:
 async def cmd_admin(message: Message, state: FSMContext) -> None:
     await state.clear()
     role = await get_role(message.from_user.id) or "admin"
-    await message.answer(_panel_text(role), reply_markup=_panel_kb(role == "super_admin"))
+    await render_focus(
+        message.bot, message,
+        _panel_text(role), _panel_kb(role == "super_admin"),
+    )
+
+
+async def show_panel(call: CallbackQuery, state: FSMContext) -> None:
+    """Перерисовать админ-панель на сообщении колбэка (возврат из подэкран)."""
+    await state.clear()
+    role = await get_role(call.from_user.id) or "admin"
+    await safe_edit(call, _panel_text(role), _panel_kb(role == "super_admin"))
+    await call.answer()
 
 
 @router.callback_query(F.data == "admin:open")
@@ -66,7 +78,4 @@ async def cb_admin_open(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "adm:back")
 async def cb_admin_back(call: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    role = await get_role(call.from_user.id) or "admin"
-    await safe_edit(call, _panel_text(role), _panel_kb(role == "super_admin"))
-    await call.answer()
+    await show_panel(call, state)

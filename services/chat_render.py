@@ -10,11 +10,44 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, Message
 
 from services.chat_journal import journal
 
 log = logging.getLogger(__name__)
+
+
+async def render_focus(
+    bot: Bot,
+    message: Message,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    **edit_kwargs,
+) -> int:
+    """Команда-вход «фокусируется» на текущем экране пользователя.
+
+    Активный экран (меню/помощь/фидбек/панель) превращается в новый экран,
+    а сообщение самой команды удаляется. Так после /start, /help, /feedback
+    не остаётся ни командного ввода, ни старого меню над ответом.
+
+    Если активного экрана нет — команда сама становится экраном (телепорт).
+    Возвращает актуальный message_id нового экрана.
+    """
+    from services.workspace import ws
+
+    user_id = message.from_user.id
+    active = ws.active(user_id)
+    target = active if active is not None else message.message_id
+    new_id = await render(
+        bot, message.chat.id, target, text, reply_markup, **edit_kwargs,
+    )
+    if target != message.message_id:
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    ws.set_active(user_id, new_id)
+    return new_id
 
 
 async def render(

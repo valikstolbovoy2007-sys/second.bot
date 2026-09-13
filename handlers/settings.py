@@ -36,15 +36,15 @@ async def _settings_text(pause_until: date | None) -> str:
 
 
 async def _render_settings(call: CallbackQuery) -> None:
-    ws.pop_help(call.from_user.id)
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     s = await get_settings(user_id)
     assert s is not None
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await _settings_text(s.pause_until),
         settings_menu_kb(s.pause_until),
     )
+    ws.set_active(call.from_user.id, new_id)
     await call.answer()
 
 
@@ -52,11 +52,12 @@ async def _render_notify_menu(call: CallbackQuery) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     s = await get_settings(user_id)
     assert s is not None
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("settings.notify_title"),
         notify_settings_kb(s.notify_arrival, s.notify_cheap_day),
     )
+    ws.set_active(call.from_user.id, new_id)
     await call.answer()
 
 
@@ -97,11 +98,12 @@ async def cb_pause_menu(call: CallbackQuery, callback_data: SettingsCb) -> None:
     s = await get_settings(user_id)
     assert s is not None
     active = bool(s.pause_until and s.pause_until > date.today())
-    await render(
+    new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("settings.pause_picker"),
         pause_picker_kb(active),
     )
+    ws.set_active(call.from_user.id, new_id)
     await call.answer()
 
 
