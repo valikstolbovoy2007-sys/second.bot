@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InputMediaPhoto
 
@@ -54,6 +55,25 @@ async def _resend_replace(
     except TelegramBadRequest:
         pass
     return sent
+
+
+async def send_shop_card(
+    bot: Bot,
+    chat_id: int,
+    shop: Shop,
+    today: date,
+    *,
+    is_tracked: bool,
+    kb: InlineKeyboardMarkup,
+) -> int:
+    """Отправить карточку магазина отдельным (новым) сообщением; вернуть id."""
+    body = await format_shop_card(shop, today, is_tracked=is_tracked)
+    photo_id = await _resolve_photo_id(shop) if len(body) <= CAPTION_LIMIT else None
+    if photo_id:
+        sent = await bot.send_photo(chat_id, photo_id, caption=body, reply_markup=kb)
+    else:
+        sent = await bot.send_message(chat_id, body, reply_markup=kb, disable_web_page_preview=True)
+    return sent.message_id
 
 
 async def _requires_teleport(call: CallbackQuery) -> bool:
