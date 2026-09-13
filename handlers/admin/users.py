@@ -16,7 +16,7 @@ from aiogram.types import (
 from data.db import pool
 from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from handlers.admin.filters import IsAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from states.admin_states import AdminDmStates
 
@@ -34,6 +34,12 @@ class UCb(CallbackData, prefix="admu"):
 
 class USearch(StatesGroup):
     query = State()
+
+
+def _back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← В меню пользователей", callback_data="adm:users:menu")],
+    ])
 
 
 @router.callback_query(F.data == "adm:users:menu")
@@ -110,16 +116,20 @@ async def cb_list(call: CallbackQuery) -> None:
 @router.callback_query(UCb.filter(F.action == "search"))
 async def cb_search(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(USearch.query)
-    await call.message.answer("Введи tg_id или @username:")
+    await render_screen_call(call, state, "Введи tg_id или @username:", _back_kb())
     await call.answer()
 
 
 @router.message(USearch.query, F.text)
 async def msg_search(message: Message, state: FSMContext) -> None:
+    if message.text.strip() == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _back_kb())
+        await state.clear()
+        return
     items = await _scoped_users(message.from_user.id, message.text.strip(), 30)
-    await state.clear()
     if not items:
-        await message.answer("Не найдено в твоём scope.")
+        await render_screen_msg(message, state, "Не найдено в твоём scope.", _back_kb())
+        await state.clear()
         return
     lines = ["<b>Найдено:</b>"]
     rows = []
@@ -129,8 +139,9 @@ async def msg_search(message: Message, state: FSMContext) -> None:
             text=f"@{u['username'] or u['tg_id']}",
             callback_data=UCb(action="card", tg_id=u['tg_id']).pack(),
         )])
-    rows.append([InlineKeyboardButton(text="← Назад", callback_data="adm:users:menu")])
-    await message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    rows.append([InlineKeyboardButton(text="← В меню пользователей", callback_data="adm:users:menu")])
+    await render_screen_msg(message, state, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
+    await state.clear()
 
 
 def _card_kb(tg_id: int, is_super: bool, paused: bool, blocked: bool) -> InlineKeyboardMarkup:
@@ -208,9 +219,11 @@ async def cb_dm_start(call: CallbackQuery, callback_data: UCb, state: FSMContext
         return
     await state.set_state(AdminDmStates.text)
     await state.update_data(target_tg_id=callback_data.tg_id)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         f"✉️ Введи текст сообщения для @{html.escape(items[0]['username'] or str(callback_data.tg_id))} "
-        f"(до 4000 символов). /cancel — отмена."
+        f"(до 4000 символов). /cancel — отмена.",
+        _back_kb(),
     )
     await call.answer()
 
@@ -218,18 +231,21 @@ async def cb_dm_start(call: CallbackQuery, callback_data: UCb, state: FSMContext
 @router.message(AdminDmStates.text, F.text)
 async def msg_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
     if message.text.strip() == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _back_kb())
         await state.clear()
-        await message.answer("Отменено.")
         return
     text = message.text.strip()
     if len(text) > 4000:
-        await message.answer("Слишком длинно (макс 4000). Сократи.")
+        await render_screen_msg(
+            message, state, "Слишком длинно (макс 4000). Сократи.", _back_kb(),
+            keep_input=True,
+        )
         return
     data = await state.get_data()
     target = int(data.get("target_tg_id", 0))
     if not target:
+        await render_screen_msg(message, state, "Битый адресат. Начни заново.", _back_kb())
         await state.clear()
-        await message.answer("Битый адресат. Начни заново.")
         return
     body = (
         "✉️ <b>Сообщение от администрации</b>\n\n"
@@ -240,7 +256,9 @@ async def msg_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
         await bot.send_message(target, body)
     except Exception as e:
         log.exception("admin DM failed")
-        await message.answer(f"❌ Не доставлено: {html.escape(str(e))}")
+        await render_screen_msg(
+            message, state, f"❌ Не доставлено: {html.escape(str(e))}", _back_kb(),
+        )
         await state.clear()
         return
     async with pool().acquire() as conn:
@@ -252,8 +270,8 @@ async def msg_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
         message.from_user.id, "user.dm", "user", target,
         {"len": len(text)},
     )
+    await render_screen_msg(message, state, "✅ Доставлено.", _back_kb())
     await state.clear()
-    await message.answer("✅ Доставлено.")
 
 
 # ---------- pause / unpause ----------

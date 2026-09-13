@@ -19,7 +19,7 @@ from aiogram.types import (
 
 from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from handlers.admin.filters import IsAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.config_live import get as cfg_get, set_value as cfg_set
 from services.parsers import (
@@ -41,6 +41,18 @@ router.callback_query.filter(IsAdmin())
 class ParCb(CallbackData, prefix="admpar"):
     action: str
     key: str | None = None
+
+
+def _view_back_kb(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← К парсеру", callback_data=ParCb(action="view", key=key).pack())],
+    ])
+
+
+def _cron_cancel_kb(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data=ParCb(action="view", key=key).pack())],
+    ])
 
 
 # ---------- menu ----------
@@ -130,7 +142,7 @@ async def cb_view(call: CallbackQuery, callback_data: ParCb) -> None:
 
 async def _do_run(call: CallbackQuery, key: str, *, apply: bool, show_progress_text: bool = True) -> None:
     if show_progress_text:
-        await call.message.answer("⏳ Запускаю…")
+        await safe_edit(call, "⏳ Запускаю…")
     await call.answer()
     is_super = await is_super_admin(call.from_user.id)
     scope = None if is_super else (await resolve_actor_scope(call.from_user.id) or [])
@@ -144,10 +156,10 @@ async def _do_run(call: CallbackQuery, key: str, *, apply: bool, show_progress_t
         )
     except Exception as e:
         log.exception("run_parser failed")
-        await call.message.answer(f"❌ Ошибка: {html.escape(str(e))}")
+        await safe_edit(call, f"❌ Ошибка: {html.escape(str(e))}", _view_back_kb(key))
         return
     if "error" in result:
-        await call.message.answer(f"❌ {html.escape(result['error'])}")
+        await safe_edit(call, f"❌ {html.escape(result['error'])}", _view_back_kb(key))
         return
     # Import-mode parsers (e.g. sheets) carry richer stats.
     if "rows" in result:
@@ -163,17 +175,21 @@ async def _do_run(call: CallbackQuery, key: str, *, apply: bool, show_progress_t
         if errs:
             tail = "\n".join(html.escape(str(e)[:120]) for e in errs[:5])
             msg += f"\n\nОшибки (первые 5):\n<pre>{tail}</pre>"
-        await call.message.answer(msg)
+        await safe_edit(call, msg, _view_back_kb(key))
         return
     if result.get("dry_run"):
-        await call.message.answer(
-            f"🧪 Dry-run: anchor=<b>{result.get('anchor') or '—'}</b>"
+        await safe_edit(
+            call,
+            f"🧪 Dry-run: anchor=<b>{result.get('anchor') or '—'}</b>",
+            _view_back_kb(key),
         )
         return
     anchor = result.get("anchor") or "—"
     n = result.get("updated", 0)
-    await call.message.answer(
-        f"✅ anchor=<b>{html.escape(str(anchor))}</b>, обновлено магазинов: {n}"
+    await safe_edit(
+        call,
+        f"✅ anchor=<b>{html.escape(str(anchor))}</b>, обновлено магазинов: {n}",
+        _view_back_kb(key),
     )
 
 
@@ -221,12 +237,14 @@ async def cb_cron_prompt(call: CallbackQuery, callback_data: ParCb, state: FSMCo
     await state.set_state(ParserScheduleStates.cron)
     await state.update_data(parser_key=callback_data.key)
     cur = await get_cron(callback_data.key)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         f"Текущий cron: <code>{html.escape(cur)}</code>\n\n"
         "Введи новое выражение (формат как в Linux cron, 5 полей):\n"
         "<code>минута час день месяц день_недели</code>\n"
         "Например, <code>0 9 * * *</code> — каждый день в 9:00.\n"
         "Перезапуск шедулера произойдёт после рестарта бота.",
+        _cron_cancel_kb(callback_data.key),
     )
     await call.answer()
 
@@ -234,26 +252,31 @@ async def cb_cron_prompt(call: CallbackQuery, callback_data: ParCb, state: FSMCo
 @router.message(ParserScheduleStates.cron, F.text)
 async def msg_cron(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
+    data = await state.get_data()
+    key = data.get("parser_key") or ""
     if raw == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _cron_cancel_kb(key))
         await state.clear()
-        await message.answer("Отменено.")
         return
     parts = raw.split()
     if len(parts) != 5:
-        await message.answer("Нужно ровно 5 полей. Повтори.")
+        await render_screen_msg(
+            message, state, "Нужно ровно 5 полей. Повтори.", _cron_cancel_kb(key),
+        )
         return
     # quick sanity check via apscheduler
     try:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(raw)
     except Exception as e:
-        await message.answer(f"Не валидный cron: {html.escape(str(e))}")
+        await render_screen_msg(
+            message, state,
+            f"Не валидный cron: {html.escape(str(e))}", _cron_cancel_kb(key),
+        )
         return
-    data = await state.get_data()
-    key = data.get("parser_key")
     if not key:
+        await render_screen_msg(message, state, "Битый стейт.", _view_back_kb(""))
         await state.clear()
-        await message.answer("Битый стейт.")
         return
     await cfg_set(
         f"parser.{key}.cron", raw, type_="str",
@@ -263,7 +286,6 @@ async def msg_cron(message: Message, state: FSMContext) -> None:
     await audit_write(
         message.from_user.id, "parser.cron", "parser", key, {"cron": raw}
     )
-    await state.clear()
     from services.scheduler import get_scheduler, reschedule_parser
     sched = get_scheduler()
     applied = False
@@ -273,9 +295,12 @@ async def msg_cron(message: Message, state: FSMContext) -> None:
         "Шедулер подхватил новое расписание." if applied
         else "Применится после рестарта бота."
     )
-    await message.answer(
-        f"✅ Cron сохранён: <code>{html.escape(raw)}</code>\n{suffix}"
+    await render_screen_msg(
+        message, state,
+        f"✅ Cron сохранён: <code>{html.escape(raw)}</code>\n{suffix}",
+        _cron_cancel_kb(key),
     )
+    await state.clear()
 
 
 # ---------- log views ----------

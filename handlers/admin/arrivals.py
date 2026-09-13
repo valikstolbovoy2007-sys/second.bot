@@ -20,7 +20,7 @@ from data.repos.admin_roles import (
 )
 from data.repos.shops import get_shop, list_all_shops, list_shops_scoped, set_arrival, set_chain_arrival
 from handlers.admin.filters import IsAdmin
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ def _menu_kb(is_super: bool) -> InlineKeyboardMarkup:
         )])
     rows.append([InlineKeyboardButton(text="← Назад", callback_data="adm:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:arr:menu")],
+    ])
 
 
 # ---------- CHAIN ARRIVAL (super only) ----------
@@ -148,35 +154,57 @@ async def cb_chain_manual(call: CallbackQuery, callback_data: ArrCb, state: FSMC
         return
     await state.set_state(ArrStates.chain_date_input)
     await state.update_data(chain=callback_data.value)
-    await call.message.answer(
+    await render_screen_call(
+        call, state,
         f"Введи дату завоза для сети <b>{callback_data.value}</b> в формате YYYY-MM-DD:",
+        _cancel_kb(),
     )
     await call.answer()
+
+
+@router.message(ArrStates.chain_date_input, F.text == "/cancel")
+async def msg_chain_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(
+        message, state, "📦 <b>Завозы и циклы</b>\n\nВыбери действие:",
+        _menu_kb(await is_super_admin(message.from_user.id)),
+    )
+    await state.clear()
 
 
 @router.message(ArrStates.chain_date_input, F.text)
 async def msg_chain_manual_date(message: Message, state: FSMContext) -> None:
     if not await is_super_admin(message.from_user.id):
+        await render_screen_msg(
+            message, state, "Нет доступа.",
+            _cancel_kb(),
+        )
         await state.clear()
-        await message.answer("Нет доступа.")
         return
     data = await state.get_data()
     chain = data.get("chain")
     if not chain:
+        await render_screen_msg(
+            message, state, "Сессия истекла, попробуй ещё раз.",
+            _cancel_kb(),
+        )
         await state.clear()
-        await message.answer("Сессия истекла, попробуй ещё раз.")
         return
     try:
         d = datetime.strptime(message.text.strip(), "%Y-%m-%d").date()
     except ValueError:
-        await message.answer("Формат YYYY-MM-DD, например 2026-05-15.")
+        await render_screen_msg(
+            message, state, "Формат YYYY-MM-DD, например 2026-05-15.",
+            _cancel_kb(),
+        )
         return
     n = await _apply_chain_arrival(message.from_user.id, chain, d)
-    await state.clear()
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"✅ Сеть <b>{chain}</b>: anchor {d.strftime('%d.%m.%Y')}.\n"
-        f"Обновлено магазинов: {n}"
+        f"Обновлено магазинов: {n}",
+        _cancel_kb(),
     )
+    await state.clear()
 
 
 @router.callback_query(F.data == "adm:arr:menu")
@@ -264,8 +292,20 @@ async def cb_manual(call: CallbackQuery, callback_data: ArrCb, state: FSMContext
         return
     await state.set_state(ArrStates.date_input)
     await state.update_data(shop_id=callback_data.shop_id)
-    await call.message.answer("Введи дату завоза в формате YYYY-MM-DD:")
+    await render_screen_call(
+        call, state, "Введи дату завоза в формате YYYY-MM-DD:",
+        _cancel_kb(),
+    )
     await call.answer()
+
+
+@router.message(ArrStates.date_input, F.text == "/cancel")
+async def msg_date_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(
+        message, state, "📦 <b>Завозы и циклы</b>\n\nВыбери действие:",
+        _menu_kb(await is_super_admin(message.from_user.id)),
+    )
+    await state.clear()
 
 
 @router.message(ArrStates.date_input, F.text)
@@ -273,17 +313,26 @@ async def msg_manual_date(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     shop_id = data["shop_id"]
     if not await can_access_shop(message.from_user.id, shop_id):
+        await render_screen_msg(
+            message, state, "Нет доступа.",
+            _cancel_kb(),
+        )
         await state.clear()
-        await message.answer("Нет доступа.")
         return
     try:
         d = datetime.strptime(message.text.strip(), "%Y-%m-%d").date()
     except ValueError:
-        await message.answer("Формат YYYY-MM-DD, например 2026-05-15.")
+        await render_screen_msg(
+            message, state, "Формат YYYY-MM-DD, например 2026-05-15.",
+            _cancel_kb(),
+        )
         return
     await _record_arrival(message.from_user.id, shop_id, d)
+    await render_screen_msg(
+        message, state, f"✅ Anchor установлен: {d.strftime('%d.%m.%Y')}",
+        _cancel_kb(),
+    )
     await state.clear()
-    await message.answer(f"✅ Anchor установлен: {d.strftime('%d.%m.%Y')}")
 
 
 # ---------- History per shop (TZ §4.3) ----------

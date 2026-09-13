@@ -30,7 +30,7 @@ from data.repos.shop_photos import (
 from data.repos.shops import get_shop, list_shops_scoped
 from handlers.admin.filters import IsAdmin
 from handlers.admin.shops import ShopCb
-from handlers.admin.ui import safe_edit
+from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from states.admin_states import ShopPhotoStates, ShopSearchStates
 
@@ -49,10 +49,19 @@ class ShopXCb(CallbackData, prefix="admshx"):
 
 # ---------- search ----------
 
+def _search_cancel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✖️ Отмена",
+            callback_data=ShopCb(action="list", page=0).pack(),
+        )],
+    ])
+
+
 @router.callback_query(F.data == "adm:shops:search")
 async def cb_search_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ShopSearchStates.query)
-    await call.message.answer("🔎 Введи часть имени или адреса:")
+    await render_screen_call(call, state, "🔎 Введи часть имени или адреса:", _search_cancel_kb())
     await call.answer()
 
 
@@ -60,14 +69,14 @@ async def cb_search_start(call: CallbackQuery, state: FSMContext) -> None:
 async def msg_search_query(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     if raw == "/cancel":
+        await render_screen_msg(message, state, "Отменено.", _search_cancel_kb())
         await state.clear()
-        await message.answer("Отменено.")
         return
-    await state.clear()
     scope = await visible_shop_ids(message.from_user.id)
     items, total = await list_shops_scoped(scope, 30, 0, search=raw)
     if not items:
-        await message.answer("Ничего не нашёл.")
+        await render_screen_msg(message, state, "Ничего не нашёл.", _search_cancel_kb())
+        await state.clear()
         return
     rows = []
     for s in items:
@@ -78,10 +87,12 @@ async def msg_search_query(message: Message, state: FSMContext) -> None:
             callback_data=ShopCb(action="card", shop_id=s.id, page=0).pack(),
         )])
     rows.append([InlineKeyboardButton(text="← Назад", callback_data=ShopCb(action="list", page=0).pack())])
-    await message.answer(
+    await render_screen_msg(
+        message, state,
         f"🔎 Найдено: <b>{total}</b>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
+    await state.clear()
 
 
 # ---------- photos ----------
@@ -132,8 +143,10 @@ async def cb_addphoto(call: CallbackQuery, callback_data: ShopXCb, state: FSMCon
         return
     await state.set_state(ShopPhotoStates.upload)
     await state.update_data(shop_id=callback_data.shop_id)
-    await call.message.answer(
-        "📷 Пришли фотографию (по одной за раз). /cancel — выйти."
+    await render_screen_call(
+        call, state,
+        "📷 Пришли фотографию (по одной за раз). /cancel — выйти.",
+        _search_cancel_kb(),
     )
     await call.answer()
 
@@ -143,30 +156,34 @@ async def msg_addphoto(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     shop_id = data.get("shop_id")
     if not shop_id:
+        await render_screen_msg(message, state, "Битый стейт.", _search_cancel_kb())
         await state.clear()
-        await message.answer("Битый стейт.")
         return
     if not await can_access_shop(message.from_user.id, shop_id):
+        await render_screen_msg(message, state, "Нет доступа.", _search_cancel_kb())
         await state.clear()
-        await message.answer("Нет доступа.")
         return
     file_id = message.photo[-1].file_id
     n = await count_photos(shop_id)
     if n >= 20:
-        await message.answer("Лимит — 20 фото на магазин.")
+        await render_screen_msg(message, state, "Лимит — 20 фото на магазин.", _search_cancel_kb())
         return
     photo_id = await add_photo(shop_id, file_id, message.from_user.id)
     await audit_write(
         message.from_user.id, "shop.photo.add", "shop", shop_id,
         {"photo_id": photo_id},
     )
-    await message.answer(f"✅ Загружено фото #{photo_id}. Можешь прислать ещё или /cancel.")
+    await render_screen_msg(
+        message, state,
+        f"✅ Загружено фото #{photo_id}. Можешь прислать ещё или /cancel.",
+        _search_cancel_kb(),
+    )
 
 
 @router.message(ShopPhotoStates.upload, F.text == "/cancel")
 async def msg_addphoto_cancel(message: Message, state: FSMContext) -> None:
+    await render_screen_msg(message, state, "Готово.", _search_cancel_kb())
     await state.clear()
-    await message.answer("Готово.")
 
 
 @router.callback_query(ShopXCb.filter(F.action == "delphoto"))

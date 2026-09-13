@@ -259,8 +259,8 @@ async def _accept_tg_ids(message: Message, state: FSMContext, raw: str) -> None:
 
 @router.message(BroadcastStates.audience_list_upload, F.text == "/cancel")
 async def msg_list_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
     await _render_menu(message, state)
+    await state.clear()
 
 
 @router.message(BroadcastStates.audience_list_upload, F.document)
@@ -370,8 +370,8 @@ async def _go_text_msg(message: Message, state: FSMContext, note: str = "") -> N
 
 @router.message(BroadcastStates.text, F.text == "/cancel")
 async def msg_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
     await _render_menu(message, state)
+    await state.clear()
 
 
 @router.message(BroadcastStates.text, F.text)
@@ -440,8 +440,8 @@ async def cb_schedule(call: CallbackQuery, callback_data: BcCb, state: FSMContex
 async def msg_schedule_manual(message: Message, state: FSMContext) -> None:
     raw = message.text.strip()
     if raw == "/cancel":
-        await state.clear()
         await _render_menu(message, state)
+        await state.clear()
         return
     try:
         when = datetime.strptime(raw, "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
