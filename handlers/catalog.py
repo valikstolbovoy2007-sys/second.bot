@@ -250,7 +250,9 @@ async def _ask_location(
         keyboard=[[KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)]],
         resize_keyboard=True,
     )
-    sent_kb = await msg.answer(await t("catalog.nearby.kb_carrier"), reply_markup=loc_kb)
+    # Сообщение-переносчик клавиатуры: текст невидимый, чтобы под промптом
+    # не появилась лишняя «оповещающая» строка.
+    sent_kb = await msg.answer("\u200b", reply_markup=loc_kb)
 
     ws.set_active(user_id, sent_prompt.message_id)
     await state.update_data(
