@@ -114,7 +114,7 @@ DEFAULTS: dict[str, str] = {
     ),
     "catalog.nearby.button": "📍 Поделиться местоположением",
     "catalog.nearby.back": "👈 Назад",
-    "catalog.nearby.kb_carrier": "📍",
+    "catalog.nearby.kb_carrier": "\u00a0",
     "catalog.nearby.prompt": (
         "📍 <b>Где ты сейчас?</b>\n"
         "\n"
@@ -209,7 +209,7 @@ DESCRIPTIONS: dict[str, str] = {
     "catalog.search.prompt":  "Подсказка на экране ввода поискового запроса",
     "catalog.nearby.button":  "Кнопка reply-клавиатуры для запроса геолокации",
     "catalog.nearby.back":    "Кнопка «👈 Назад» (inline) на экране запроса геолокации",
-    "catalog.nearby.kb_carrier": "Сообщение-переносчик reply-клавиатуры на экране запроса геолокации",
+    "catalog.nearby.kb_carrier": "Служебное сообщение-переносчик reply-клавиатуры (текст невидим, не менять)",
     "catalog.nearby.prompt":  "Подсказка перед запросом геолокации (сортировка «По расстоянию»)",
 
     "myshops.title":           "Заголовок раздела «Ну мои»",
