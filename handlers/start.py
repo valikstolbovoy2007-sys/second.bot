@@ -43,16 +43,23 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         if shop_id:
             shop = await get_shop(shop_id)
             if shop and shop.is_active:
+                # Открываем карточку как ЕДИНСТВЕННЫЙ экран: команда-ввод и
+                # прежний активный экран (меню/каталог/настройки) удаляются,
+                # остаётся только карточка — ничего не дублируется.
+                old_active = ws.active(message.from_user.id)
                 is_tracked = await is_subscribed(db_user_id, shop.id)
                 kb = shop_card_kb(shop.id, is_tracked=is_tracked, src="cat", page=0)
                 card_id = await send_shop_card(
                     message.bot, message.chat.id, shop, date.today(),
                     is_tracked=is_tracked, kb=kb,
                 )
-                try:
-                    await message.delete()
-                except TelegramBadRequest:
-                    pass
+                for mid in (old_active, message.message_id):
+                    if mid is None or mid == card_id:
+                        continue
+                    try:
+                        await message.bot.delete_message(message.chat.id, mid)
+                    except TelegramBadRequest:
+                        pass
                 ws.set_active(message.from_user.id, card_id)
                 return
 
