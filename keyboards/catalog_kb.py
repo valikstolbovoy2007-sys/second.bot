@@ -155,9 +155,9 @@ def catalog_kb(
         ),
     ])
 
-    # Primary filters: All | 💘Ну мои | ⋯ Ещё.
+    # Primary filters: Все | 💘Ну мои | 📍По расстоянию | ⋯ Ещё.
     primary_row: list[InlineKeyboardButton] = []
-    for code in (FLT_ALL, FLT_TRACKED):
+    for code in (FLT_ALL, FLT_TRACKED, FLT_NEARBY):
         text = FILTER_LABELS[code]
         if code == flt:
             text = f"• {text} •"

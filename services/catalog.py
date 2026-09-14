@@ -38,10 +38,11 @@ VALID_FILTERS = {
 }
 
 # Filters surfaced behind the "⋯ Ещё" sub-screen.
+# «По расстоянию» живёт в основной строке фильтров: он, как «Все» и
+# «Ну мои», взаимоисключающий базовый фильтр, поэтому под меню ему не место.
 MORE_FILTERS = (
     FLT_BY_WEIGHT,
     FLT_BY_PRICE,
-    FLT_NEARBY,
 )
 
 SORT_NAME = "name"
