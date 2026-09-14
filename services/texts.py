@@ -114,6 +114,7 @@ DEFAULTS: dict[str, str] = {
     ),
     "catalog.nearby.button": "📍 Поделиться местоположением",
     "catalog.nearby.back": "👈 Назад",
+    "catalog.nearby.kb_carrier": "📍",
     "catalog.nearby.prompt": (
         "📍 <b>Где ты сейчас?</b>\n"
         "\n"
@@ -208,6 +209,7 @@ DESCRIPTIONS: dict[str, str] = {
     "catalog.search.prompt":  "Подсказка на экране ввода поискового запроса",
     "catalog.nearby.button":  "Кнопка reply-клавиатуры для запроса геолокации",
     "catalog.nearby.back":    "Кнопка «👈 Назад» (inline) на экране запроса геолокации",
+    "catalog.nearby.kb_carrier": "Сообщение-переносчик reply-клавиатуры на экране запроса геолокации",
     "catalog.nearby.prompt":  "Подсказка перед запросом геолокации (сортировка «По расстоянию»)",
 
     "myshops.title":           "Заголовок раздела «Ну мои»",
@@ -248,7 +250,7 @@ GROUPS: list[tuple[str, str, list[str]]] = [
         "catalog.title", "catalog.found", "catalog.hint", "catalog.legend",
         "catalog.empty", "catalog.empty_filter", "catalog.shop_not_found",
         "catalog.more_title", "catalog.sort_title", "catalog.search.prompt",
-        "catalog.nearby.button", "catalog.nearby.back",
+        "catalog.nearby.button", "catalog.nearby.back", "catalog.nearby.kb_carrier",
         "catalog.nearby.prompt",
     ]),
     ("myshops", "Мои магазины", [
