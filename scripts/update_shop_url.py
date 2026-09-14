@@ -1,4 +1,11 @@
-"""Update a shop's maps_url (and refresh its coordinates). Usage: update_shop_url.py <id> <url>."""
+"""Update a shop's maps_url (and refresh its coordinates).
+
+Usage:
+    update_shop_url.py <id> <url> [lat lng]
+
+With lat/lng provided the coordinates are set manually (when the resolver
+can't get an exact pin). Without them, coords are resolved from the URL.
+"""
 import asyncio
 import sys
 
@@ -18,13 +25,19 @@ async def main() -> None:
         print(f"shop #{shop_id} not found")
         return
     await update_shop_field(shop_id, "maps_url", url)
-    coords = await resolve_shop_coords(url)
-    if coords:
-        await set_shop_coords(shop_id, *coords)
-        print(f"OK #{shop_id} {shop.name}: {coords[0]:.6f},{coords[1]:.6f}")
+    if len(sys.argv) >= 5:
+        lat = float(sys.argv[3])
+        lng = float(sys.argv[4])
+        await set_shop_coords(shop_id, lat, lng)
+        print(f"MANUAL #{shop_id} {shop.name}: {lat:.6f},{lng:.6f}")
     else:
-        await clear_shop_coords(shop_id)
-        print(f"FAIL #{shop_id} {shop.name}: no coords from {url}")
+        coords = await resolve_shop_coords(url)
+        if coords:
+            await set_shop_coords(shop_id, *coords)
+            print(f"OK #{shop_id} {shop.name}: {coords[0]:.6f},{coords[1]:.6f}")
+        else:
+            await clear_shop_coords(shop_id)
+            print(f"FAIL #{shop_id} {shop.name}: no coords from {url}")
     await close_db()
 
 
