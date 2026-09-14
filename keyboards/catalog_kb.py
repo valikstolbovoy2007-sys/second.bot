@@ -16,6 +16,10 @@ from services.catalog import (
 
 PAGE_SIZE = 6
 
+# Максимум символов в подписи кнопки магазина: при коротком заголовке
+# сообщения слишком длинные кнопки вылезают шире текста — держим их в один ряд.
+_MAX_LABEL_LEN = 42
+
 # Filter button labels (used both on main keyboard and on the "More" sub-screen).
 FILTER_LABELS: dict[str, str] = {
     FLT_ALL:             "Все",
@@ -35,7 +39,7 @@ SORT_LABELS: dict[str, str] = {
     SORT_NAME:    "По названию",
     SORT_ARRIVAL: "По дню завоза",
     SORT_PRICE:   "По цене сегодня",
-    SORT_NEARBY:  "📍 По расстоянию",
+    SORT_NEARBY:  "По расстоянию",
 }
 
 
@@ -76,7 +80,7 @@ def _shop_button_label(
     markers = "".join(m for m in (("" if shop.price_start else "🎩"), phase_marker) if m)
     prefix = ""
     if distance_km is not None:
-        prefix += f"📍 {_format_km(distance_km)} км "
+        prefix += f"{_format_km(distance_km)} км · "
     if markers:
         prefix += markers + " "
     if tracked:
@@ -84,7 +88,7 @@ def _shop_button_label(
     name = shop.name
     if shop.chain_name and shop.chain_name not in name:
         name = f"{shop.chain_name}: {name}"
-    return f"{prefix}{name}"[:60]
+    return f"{prefix}{name}"[:_MAX_LABEL_LEN]
 
 
 def catalog_kb(

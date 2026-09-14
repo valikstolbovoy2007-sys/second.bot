@@ -296,7 +296,7 @@ def test_catalog_kb_nearby_label_shows_distance():
         distances={1: 2.34},
     )
     texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert any("📍 2,3 км" in t for t in texts)
+    assert any("2,3 км ·" in t for t in texts)
     assert any("Евро" in t for t in texts)
 
     # Без distance-режима дистанция в подписи не появляется.
