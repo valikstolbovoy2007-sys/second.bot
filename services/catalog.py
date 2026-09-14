@@ -27,19 +27,15 @@ FLT_ALL = "all"
 FLT_TRACKED = "tracked"
 FLT_BY_WEIGHT = "by_weight"
 FLT_BY_PRICE = "by_price"
-FLT_NEARBY = "nearby"
 
 VALID_FILTERS = {
     FLT_ALL,
     FLT_TRACKED,
     FLT_BY_WEIGHT,
     FLT_BY_PRICE,
-    FLT_NEARBY,
 }
 
 # Filters surfaced behind the "⋯ Ещё" sub-screen.
-# «По расстоянию» живёт в основной строке фильтров: он, как «Все» и
-# «Ну мои», взаимоисключающий базовый фильтр, поэтому под меню ему не место.
 MORE_FILTERS = (
     FLT_BY_WEIGHT,
     FLT_BY_PRICE,
@@ -48,12 +44,9 @@ MORE_FILTERS = (
 SORT_NAME = "name"
 SORT_ARRIVAL = "next_arrival"
 SORT_PRICE = "price"
+SORT_NEARBY = "nearby"
 
-VALID_SORTS = {SORT_NAME, SORT_ARRIVAL, SORT_PRICE}
-
-# Максимальная дистанция для фильтра «По расстоянию» (км). Дальше города
-# секондов нет смысла показывать.
-NEARBY_MAX_KM = 100.0
+VALID_SORTS = {SORT_NAME, SORT_ARRIVAL, SORT_PRICE, SORT_NEARBY}
 
 _EARTH_RADIUS_KM = 6371.0
 
@@ -112,7 +105,6 @@ def shop_distance_km(shop: Shop, point: tuple[float, float] | None) -> float | N
 
 def matches(
     facts: ShopFacts, flt: str, *, is_tracked: bool,
-    point: tuple[float, float] | None = None,
 ) -> bool:
     if flt == FLT_ALL:
         return True
@@ -122,11 +114,6 @@ def matches(
         return bool(facts.shop.price_start)
     if flt == FLT_BY_PRICE:
         return not facts.shop.price_start
-    if flt == FLT_NEARBY:
-        if point is None:
-            return False
-        distance = shop_distance_km(facts.shop, point)
-        return distance is not None and distance <= NEARBY_MAX_KM
     return True
 
 
@@ -174,18 +161,18 @@ def apply(
 ) -> list[Shop]:
     """Returns a filtered + sorted list of shops.
 
-    `point` — (lat, lon) координаты пользователя. Обязателен для FLT_NEARBY:
-    без него магазины не проходят фильтр. Переданный `sort` игнорируется —
-    «По расстоянию» всегда сортирует по дистанции (ближайшие сверху).
+    `point` нужен только для SORT_NEARBY — магазины без координат
+    отправляются в конец списка.
     """
     facts = [compute_facts(s, today) for s in shops]
-    filtered = [
-        f for f in facts
-        if matches(f, flt, is_tracked=f.shop.id in subscribed_ids, point=point)
-        and matches_search(f, search)
-    ]
-    if flt == FLT_NEARBY:
-        filtered.sort(key=lambda f: (shop_distance_km(f.shop, point) or _BIG, f.shop.name.lower()))
+    filtered = [f for f in facts if matches(f, flt, is_tracked=f.shop.id in subscribed_ids)
+                and matches_search(f, search)]
+    if sort == SORT_NEARBY:
+        # Ближайшие сверху, без координат — в конец (и всегда после остальных).
+        filtered.sort(key=lambda f: (
+            shop_distance_km(f.shop, point) or _BIG,
+            f.shop.name.lower(),
+        ))
     else:
         filtered.sort(key=lambda f: sort_key(f, sort))
     return [f.shop for f in filtered]

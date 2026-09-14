@@ -6,11 +6,10 @@ from services.catalog import (
     FLT_ALL,
     FLT_BY_PRICE,
     FLT_BY_WEIGHT,
-    FLT_NEARBY,
     FLT_TRACKED,
-    NEARBY_MAX_KM,
     SORT_ARRIVAL,
     SORT_NAME,
+    SORT_NEARBY,
     SORT_PRICE,
     apply,
     compute_facts,
@@ -228,7 +227,7 @@ def test_apply_tracked_filter():
     assert [s.name for s in out] == ["B", "C"]
 
 
-# ---------- distance filter (По расстоянию) ----------
+# ---------- sort by distance (По расстоянию) ----------
 
 
 def test_haversine_known_distance():
@@ -248,32 +247,7 @@ def test_shop_distance_km_none_without_coords():
     assert shop_distance_km(f.shop, None) is None
 
 
-def test_nearby_without_point_matches_nothing():
-    today = date(2026, 5, 11)
-    f = compute_facts(_shop(id=1, name="A", lat=44.6, lng=33.5), today)
-    assert matches(f, FLT_NEARBY, is_tracked=False, point=None) is False
-
-
-def test_nearby_shop_without_coords_excluded():
-    today = date(2026, 5, 11)
-    f = compute_facts(_shop(id=1, name="Без координат"), today)
-    assert matches(f, FLT_NEARBY, is_tracked=False, point=(44.6, 33.5)) is False
-
-
-def test_nearby_limits_to_radius():
-    today = date(2026, 5, 11)
-    us = (44.6, 33.5)  # Севастополь
-    near = _shop(id=1, name="Рядом", lat=44.6, lng=33.51)      # ~1 км
-    far = _shop(id=2, name="Далеко", lat=44.6, lng=35.0)       # ~118 км > 100
-    edge_ok = _shop(id=3, name="Граница", lat=44.6, lng=34.4)  # ~71 км < 100
-    out = apply(
-        [near, far, edge_ok], today,
-        flt=FLT_NEARBY, sort=SORT_NAME, search="", subscribed_ids=set(), point=us,
-    )
-    assert {s.name for s in out} == {"Рядом", "Граница"}
-
-
-def test_nearby_sorts_by_distance_ignoring_selected_sort():
+def test_sort_nearby_nearest_first():
     today = date(2026, 5, 11)
     us = (44.6, 33.5)
     a = _shop(id=1, name="A", lat=44.6, lng=34.2)    # ~75 км
@@ -281,20 +255,34 @@ def test_nearby_sorts_by_distance_ignoring_selected_sort():
     c = _shop(id=3, name="C", lat=44.61, lng=33.50)  # ~1.1 км
     out = apply(
         [a, b, c], today,
-        flt=FLT_NEARBY, sort=SORT_NAME, search="", subscribed_ids=set(), point=us,
+        flt=FLT_ALL, sort=SORT_NEARBY, search="", subscribed_ids=set(), point=us,
     )
-    # SORT_NAME передали намеренно — distance перекрывает сортировку.
     assert [s.name for s in out] == ["C", "B", "A"]
 
 
-def test_nearby_combines_with_search():
+def test_sort_nearby_shops_without_coords_at_end():
+    today = date(2026, 5, 11)
+    us = (44.6, 33.5)
+    far = _shop(id=1, name="Далеко", lat=44.6, lng=35.0)      # ~118 км
+    near = _shop(id=2, name="Рядом", lat=44.6, lng=33.51)     # ~1 км
+    nocoord_z = _shop(id=3, name="Без координат Z")
+    nocoord_a = _shop(id=4, name="Без координат A")
+    out = apply(
+        [nocoord_z, far, nocoord_a, near], today,
+        flt=FLT_ALL, sort=SORT_NEARBY, search="", subscribed_ids=set(), point=us,
+    )
+    # С координатами — по дистанции; без координат — в конец (по имени).
+    assert [s.name for s in out] == ["Рядом", "Далеко", "Без координат A", "Без координат Z"]
+
+
+def test_sort_nearby_combines_with_search():
     today = date(2026, 5, 11)
     us = (44.6, 33.5)
     keep = _shop(id=1, name="Megahand A", lat=44.6, lng=33.52)
     drop = _shop(id=2, name="Other", lat=44.6, lng=33.53)
     out = apply(
         [keep, drop], today,
-        flt=FLT_NEARBY, sort=SORT_NAME, search="megahand", subscribed_ids=set(), point=us,
+        flt=FLT_ALL, sort=SORT_NEARBY, search="megahand", subscribed_ids=set(), point=us,
     )
     assert [s.name for s in out] == ["Megahand A"]
 
@@ -304,7 +292,7 @@ def test_catalog_kb_nearby_label_shows_distance():
 
     s = _shop(id=1, name="Евро", lat=44.6, lng=33.5)
     kb = catalog_kb(
-        [s], 0, FLT_NEARBY, SORT_NAME, 1, has_search=False,
+        [s], 0, FLT_ALL, SORT_NEARBY, 1, has_search=False,
         distances={1: 2.34},
     )
     texts = [b.text for row in kb.inline_keyboard for b in row]

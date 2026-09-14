@@ -37,8 +37,8 @@ from services.maps import yandex_maps_url
 from services.workspace import ws
 from services.catalog import (
     FLT_ALL,
-    FLT_NEARBY,
     SORT_NAME,
+    SORT_NEARBY,
     VALID_FILTERS,
     VALID_SORTS,
     apply,
@@ -56,8 +56,8 @@ _user_search: dict[int, str] = {}
 _MAX_SEARCH_LEN = 60
 
 # In-memory map: telegram user_id → последние переданные координаты (lat, lon).
-# Использует только distance-фильтр; переспрашиваем локацию при каждой
-# АКТИВАЦИИ фильтра (см. cb_filter), между её активациями точка живёт в памяти.
+# Использует только sort=SORT_NEARBY; локацию переспрашиваем при каждой
+# активации сортировки (см. cb_sort_pick), между активациями точка живёт в памяти.
 _user_location: dict[int, tuple[float, float]] = {}
 
 
@@ -105,8 +105,8 @@ async def _catalog_payload(
     user_id — id юзера в БД (для подписок), tg_id — телеграм-id (ключ
     активного поиска, т.к. поиск хранится в памяти под tg-id).
 
-    `point` — (lat, lon) для distance-фильтра; без него FLT_NEARBY даёт
-    пустой результат.
+    `point` — (lat, lon) для сортировки SORT_NEARBY; без точки магазины
+    без координат остаются в конце списка.
     """
     flt = _norm_flt(flt)
     sort = _norm_sort(sort)
@@ -135,7 +135,7 @@ async def _catalog_payload(
     markers = _phase_markers(page_shops, today)
 
     distances: dict[int, float] | None = None
-    if flt == FLT_NEARBY and point is not None:
+    if sort == SORT_NEARBY and point is not None:
         distances = {
             s.id: d for s in page_shops
             if (d := shop_distance_km(s, point)) is not None
@@ -160,7 +160,7 @@ async def _render_catalog(
     sort: str,
     state: FSMContext | None = None,
 ) -> None:
-    if flt == FLT_NEARBY:
+    if sort == SORT_NEARBY:
         point = _point_for(call.from_user.id)
         if point is None:
             await _ask_location(call, flt=flt, sort=sort, state=state)
@@ -181,7 +181,7 @@ async def _close_card_back_to_catalog(
     state: FSMContext | None = None,
 ) -> None:
     """«Назад» с карточки: список появляется, затем карточка удаляется."""
-    if flt == FLT_NEARBY:
+    if sort == SORT_NEARBY:
         point = _point_for(call.from_user.id)
         if point is None:
             await _ask_location(call, flt=flt, sort=sort, state=state)
@@ -273,13 +273,7 @@ async def cb_list(call: CallbackQuery, callback_data: CatalogCb, state: FSMConte
 
 @router.callback_query(CatalogCb.filter(F.action == "filter"))
 async def cb_filter(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
-    flt = callback_data.flt
-    if flt == FLT_NEARBY:
-        # Активация distance-фильтра — всегда переспрашиваем локацию, чтобы
-        # каталог строился от текущего положения, а не от вчерашнего.
-        await _ask_location(call, flt=FLT_NEARBY, sort=_norm_sort(callback_data.sort), state=state)
-        return
-    await _render_catalog(call, page=0, flt=flt, sort=callback_data.sort, state=state)
+    await _render_catalog(call, page=0, flt=callback_data.flt, sort=callback_data.sort, state=state)
 
 
 # ---------- shop card / schedule ----------
@@ -362,6 +356,13 @@ async def cb_sort_open(call: CallbackQuery, callback_data: CatalogCb) -> None:
 @router.callback_query(CatalogCb.filter(F.action == "sort_pick"))
 async def cb_sort_pick(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
     new_sort = _norm_sort(callback_data.value or SORT_NAME)
+    if new_sort == SORT_NEARBY:
+        # Активация сортировки «По расстоянию» — всегда переспрашиваем локацию,
+        # чтобы каталог строился от текущего положения, а не от вчерашнего.
+        await _ask_location(
+            call, flt=_norm_flt(callback_data.flt), sort=SORT_NEARBY, state=state,
+        )
+        return
     await _render_catalog(call, page=0, flt=callback_data.flt, sort=new_sort, state=state)
 
 
@@ -429,7 +430,7 @@ async def _render_search_result(
         await message.delete()
     except TelegramBadRequest:
         pass
-    if flt == FLT_NEARBY:
+    if sort == SORT_NEARBY:
         point = _point_for(message.from_user.id)
     else:
         point = None
@@ -476,7 +477,7 @@ async def msg_catalog_location(message: Message, state: FSMContext) -> None:
     await state.clear()
     point = (message.location.latitude, message.location.longitude)
     _user_location[message.from_user.id] = point
-    flt = FLT_NEARBY
+    flt = _norm_flt(data.get("cat_flt", FLT_ALL))
     sort = _norm_sort(data.get("cat_sort", SORT_NAME))
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     body, kb = await _catalog_payload(
@@ -505,11 +506,11 @@ async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     flt = _norm_flt(data.get("cat_flt", FLT_ALL))
     sort = _norm_sort(data.get("cat_sort", SORT_NAME))
-    # Точки пользователь не дал — distance-фильтр нечего показывать,
-    # возвращаем полный каталог (иначе флоу «запросили и передумали» дал
-    # бы пустой экран).
-    if flt == FLT_NEARBY and _point_for(message.from_user.id) is None:
-        flt = FLT_ALL
+    # Точки пользователь не дал — сортировку «По расстоянию» нечего показывать
+    # (без точки все магазины попадут в конец "без координат"), откатываемся
+    # на «По названию».
+    if sort == SORT_NEARBY and _point_for(message.from_user.id) is None:
+        sort = SORT_NAME
     try:
         removal = await message.answer("🗑", reply_markup=ReplyKeyboardRemove())
         await removal.delete()

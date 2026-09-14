@@ -6,11 +6,11 @@ from services.catalog import (
     FLT_ALL,
     FLT_BY_PRICE,
     FLT_BY_WEIGHT,
-    FLT_NEARBY,
     FLT_TRACKED,
     MORE_FILTERS,
     SORT_ARRIVAL,
     SORT_NAME,
+    SORT_NEARBY,
     SORT_PRICE,
 )
 
@@ -22,7 +22,6 @@ FILTER_LABELS: dict[str, str] = {
     FLT_TRACKED:         "💘 Ну мои",
     FLT_BY_WEIGHT:       "⚖️ По весу",
     FLT_BY_PRICE:        "📌 По цене",
-    FLT_NEARBY:          "📍 По расстоянию",
 }
 
 # Short label for the header (when a non-default filter is active).
@@ -30,13 +29,13 @@ FILTER_SHORT: dict[str, str] = {
     FLT_TRACKED:         "💘 Ну мои",
     FLT_BY_WEIGHT:       "⚖️ По весу",
     FLT_BY_PRICE:        "📌 По цене",
-    FLT_NEARBY:          "📍 По расстоянию",
 }
 
 SORT_LABELS: dict[str, str] = {
     SORT_NAME:    "По названию",
     SORT_ARRIVAL: "По дню завоза",
     SORT_PRICE:   "По цене сегодня",
+    SORT_NEARBY:  "📍 По расстоянию",
 }
 
 
@@ -155,9 +154,9 @@ def catalog_kb(
         ),
     ])
 
-    # Primary filters: Все | 💘Ну мои | 📍По расстоянию | ⋯ Ещё.
+    # Primary filters: All | 💘Ну мои | ⋯ Ещё.
     primary_row: list[InlineKeyboardButton] = []
-    for code in (FLT_ALL, FLT_TRACKED, FLT_NEARBY):
+    for code in (FLT_ALL, FLT_TRACKED):
         text = FILTER_LABELS[code]
         if code == flt:
             text = f"• {text} •"
