@@ -485,6 +485,13 @@ async def msg_catalog_location(message: Message, state: FSMContext) -> None:
     )
     sent = await message.answer(body, reply_markup=kb, disable_web_page_preview=True)
     ws.set_active(user_id, sent.message_id)
+    # Если локация пришла не через кнопку (например, пересылкой) — reply-клавиатура
+    # могла остаться на экране. Сносим её коротким сообщением.
+    try:
+        removal = await message.answer("🗑", reply_markup=ReplyKeyboardRemove())
+        await removal.delete()
+    except TelegramBadRequest:
+        pass
     await _delete_messages(
         message.bot, message.chat.id,
         [message.message_id, data.get("loc_msg_id")],
