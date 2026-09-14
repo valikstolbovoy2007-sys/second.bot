@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 from dataclasses import dataclass
@@ -27,6 +28,18 @@ EVENT_HEADERS: dict[str, str] = {
 }
 EVENT_ORDER: list[str] = ["arrival", "cheap_day"]
 
+# Кэш username бота для deep-ссылок. Устанавливается один раз при старте.
+_bot_username: str | None = None
+
+
+def set_bot_username(username: str) -> None:
+    global _bot_username
+    _bot_username = username
+
+
+def get_bot_username() -> str | None:
+    return _bot_username
+
 
 @dataclass(frozen=True)
 class Trigger:
@@ -37,26 +50,26 @@ class Trigger:
     lead_days: int = 0  # 0 = "сегодня"; 1 = "завтра", etc.
 
 
-def format_message(triggers: list[Trigger]) -> str:
-    if not triggers:
-        return ""
-    by_type: dict[str, list[Trigger]] = {}
-    for t in triggers:
-        by_type.setdefault(t.event_type, []).append(t)
+def _shop_deep_link(shop_id: int) -> str | None:
+    username = _bot_username
+    if not username:
+        return None
+    return f"https://t.me/{username}?start=shop_{shop_id}"
 
-    lines: list[str] = ["🔔 <b>Уведомление по твоим магазинам:</b>", ""]
-    for et in EVENT_ORDER:
-        items = by_type.get(et)
-        if not items:
-            continue
-        lines.append(f"<b>{EVENT_HEADERS[et]}</b>")
-        for tr in items:
-            when = humanize_days(tr.lead_days)
-            lines.append(
-                f"   • <b>{html.escape(tr.shop_name)}</b> — {html.escape(tr.address)} ({when})"
-            )
+
+def format_shop_message(trigger: Trigger) -> str:
+    """Одно уведомление: один магазин, одно событие + deep link."""
+    when = humanize_days(trigger.lead_days)
+    link = _shop_deep_link(trigger.shop_id)
+    lines = [
+        f"🔔 <b>{html.escape(trigger.shop_name)}</b>",
+        f"{EVENT_HEADERS[trigger.event_type]} {when}",
+        f"📍 {html.escape(trigger.address)}",
+    ]
+    if link:
         lines.append("")
-    return "\n".join(lines).rstrip()
+        lines.append(f'<a href="{link}">🔗 Открыть карточку</a>')
+    return "\n".join(lines)
 
 
 async def run_for_minute(bot: Bot, when: datetime) -> None:
@@ -99,32 +112,48 @@ async def run_for_minute(bot: Bot, when: datetime) -> None:
         fresh = [t for t in triggers if (t.shop_id, t.event_type) not in sent]
         if not fresh:
             continue
-        await _send_and_mark(bot, user_id, fresh, today, tg_id=tg_by_user.get(user_id))
+        await _send_per_shop(bot, user_id, fresh, today, tg_id=tg_by_user.get(user_id))
 
 
-async def _send_and_mark(
-    bot: Bot, user_id: int, triggers: list[Trigger], today: date, *, tg_id: int | None = None,
+async def _send_per_shop(
+    bot: Bot,
+    user_id: int,
+    triggers: list[Trigger],
+    today: date,
+    *,
+    tg_id: int | None = None,
 ) -> None:
-    text = format_message(triggers)
+    """Отправить по одному сообщению на каждый триггер (магазин + событие)."""
     if tg_id is None:
         tg_id = await _get_tg_id(user_id)
     if tg_id is None:
         return
-    try:
-        msg = await bot.send_message(tg_id, text)
-    except TelegramForbiddenError:
-        log.warning("user %s blocked the bot", tg_id)
-        await mark_blocked(user_id)
-        return
-    except TelegramRetryAfter as e:
-        log.warning("flood limit, retry after %s sec", e.retry_after)
-        return
-    except Exception:
-        log.exception("send failed for user_id=%s", user_id)
-        return
 
-    journal.record(tg_id, msg.message_id)
-    await mark_sent(user_id, [(t.shop_id, t.event_type) for t in triggers], today)
+    sent_pairs: list[tuple[int, str]] = []
+    for i, trigger in enumerate(triggers):
+        text = format_shop_message(trigger)
+        try:
+            msg = await bot.send_message(tg_id, text, disable_web_page_preview=True)
+        except TelegramForbiddenError:
+            log.warning("user %s blocked the bot", tg_id)
+            await mark_blocked(user_id)
+            return
+        except TelegramRetryAfter as e:
+            log.warning("flood limit, retry after %s sec", e.retry_after)
+            return
+        except Exception:
+            log.exception("send failed for user_id=%s shop_id=%s", user_id, trigger.shop_id)
+            continue
+
+        journal.record(tg_id, msg.message_id)
+        sent_pairs.append((trigger.shop_id, trigger.event_type))
+
+        # Пауза между сообщениями: Telegram → 20 msg/min на тот же чат.
+        if i < len(triggers) - 1:
+            await asyncio.sleep(0.1)
+
+    if sent_pairs:
+        await mark_sent(user_id, sent_pairs, today)
 
 
 async def _get_tg_id(user_id: int) -> int | None:

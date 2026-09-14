@@ -7,8 +7,9 @@ from services.notifier import (
     CHEAP_DAY_LEAD_DAYS,
     NOTIFY_AT,
     Trigger,
-    format_message,
+    format_shop_message,
     run_for_minute,
+    set_bot_username,
 )
 
 ANCHOR = date(2026, 4, 1)  # cycle_length=14 -> arrival on Apr 1, 15, 29...
@@ -32,35 +33,45 @@ def _row(**overrides) -> dict:
     return base
 
 
-class TestFormatMessage:
-    def test_empty_returns_empty_string(self) -> None:
-        assert format_message([]) == ""
+class TestFormatShopMessage:
+    def setup_method(self) -> None:
+        set_bot_username("Shmot92Bot")
+
+    def teardown_method(self) -> None:
+        set_bot_username(None)
 
     def test_single_trigger(self) -> None:
         trig = Trigger(1, "Megahand", "пр. Острякова 65А", "arrival", lead_days=1)
-        msg = format_message([trig])
+        msg = format_shop_message(trig)
         assert "🚚 Завоз" in msg
         assert "Megahand" in msg
         assert "пр. Острякова 65А" in msg
         assert "завтра" in msg
 
-    def test_groups_by_event_type(self) -> None:
-        triggers = [
-            Trigger(1, "Megahand", "адрес 1", "arrival", lead_days=1),
-            Trigger(2, "Favorite", "адрес 2", "arrival", lead_days=1),
-            Trigger(3, "Shop3", "адрес 3", "cheap_day", lead_days=0),
-        ]
-        msg = format_message(triggers)
-        # arrival comes before cheap_day per EVENT_ORDER
-        assert msg.index("🚚") < msg.index("💰")
-        assert msg.count("🚚") == 1  # one header
-        assert "Megahand" in msg and "Favorite" in msg and "Shop3" in msg
+    def test_cheap_day_lead_today(self) -> None:
+        trig = Trigger(1, "Megahand", "адрес", "cheap_day", lead_days=0)
+        msg = format_shop_message(trig)
+        assert "💰 Дешёвый день" in msg
+        assert "сегодня" in msg
 
     def test_html_escapes_shop_name(self) -> None:
         trig = Trigger(1, "<script>", "адрес", "arrival", lead_days=1)
-        msg = format_message([trig])
+        msg = format_shop_message(trig)
         assert "<script>" not in msg
         assert "&lt;script&gt;" in msg
+
+    def test_deep_link_uses_bot_username_and_shop_id(self) -> None:
+        trig = Trigger(42, "Shop", "адрес", "arrival", lead_days=1)
+        msg = format_shop_message(trig)
+        assert "https://t.me/Shmot92Bot?start=shop_42" in msg
+        assert "🔗 Открыть карточку" in msg
+
+    def test_no_username_no_link(self) -> None:
+        set_bot_username(None)
+        trig = Trigger(1, "Shop", "адрес", "arrival", lead_days=1)
+        msg = format_shop_message(trig)
+        assert "Открыть карточку" not in msg
+        assert "t.me/" not in msg
 
 
 class TestRunForMinute:
@@ -100,6 +111,25 @@ class TestRunForMinute:
             _tg_id, text = bot.send_message.call_args[0]
             assert "💰 Дешёвый день" in text
             mark_sent_mock.assert_called_once_with(1, [(1, "cheap_day")], date(2026, 4, 14))
+
+    def test_two_shops_same_user_send_two_messages(self) -> None:
+        row_a = _row(user_id=1, tg_id=555, shop_id=1, name="Shop A", notify_cheap_day=False)
+        row_b = _row(user_id=1, tg_id=555, shop_id=2, name="Shop B", notify_cheap_day=False)
+        with patch("services.notifier.fetch_notify_candidates",
+                   new=AsyncMock(return_value=[row_a, row_b])), \
+             patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
+             patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
+            bot = AsyncMock()
+            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            asyncio.run(run_for_minute(bot, when))
+            assert bot.send_message.call_count == 2
+            texts = [c.args[1] for c in bot.send_message.call_args_list]
+            assert any("Shop A" in t for t in texts)
+            assert any("Shop B" in t for t in texts)
+            # Каждое (shop_id, event_type) маркируется отдельно.
+            mark_sent_mock.assert_called_once_with(
+                1, [(1, "arrival"), (2, "arrival")], date(2026, 4, 14),
+            )
 
     def test_no_cycle_shop_produces_no_trigger(self) -> None:
         row = _row(cycle_length=None, anchor_date=None)

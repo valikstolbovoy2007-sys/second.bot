@@ -23,6 +23,7 @@ from handlers import superadmin
 from middlewares.maintenance import MaintenanceMiddleware
 from middlewares.throttling import ThrottlingMiddleware
 from services.broadcasts import start_dispatcher, stop_dispatcher
+from services import notifier
 from services.scheduler import start_scheduler
 from services.texts import warm_cache as warm_texts_cache
 
@@ -68,6 +69,14 @@ async def main() -> None:
 
     scheduler = await start_scheduler(bot)
     await start_dispatcher(bot)
+
+    # Для deep-ссылок в уведомлениях (https://t.me/<username>?start=shop_<id>).
+    try:
+        me = await bot.get_me()
+        notifier.set_bot_username(me.username)
+        log.info("bot username: %s", me.username)
+    except Exception:
+        log.exception("could not fetch bot username; deep links disabled")
 
     log.info("starting polling")
     try:
