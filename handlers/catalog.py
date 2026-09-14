@@ -8,6 +8,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
     Message,
@@ -227,24 +228,35 @@ async def _ask_location(
 ) -> None:
     """Перевести каталог в состояние запроса геолокации.
 
-    Активный экран (список/карточка) удаляется, вместо него — отдельное
-    сообщение с reply-клавиатурой «Поделиться местоположением». После ответа
-    пользователя каталог рисуется заново (см. msg_catalog_location).
+    Активный экран (список/карточка) удаляется, вместо него — сообщение с
+    inline-кнопкой «👈 Назад»; рядом второе сообщение-переносчик несёт reply-
+    клавиатуру «Поделиться местоположением» (геолокацию можно запросить только
+    reply-кнопкой, а «Назад» удобнее inline — отсюда два сообщения).
+    После ответа пользователя каталог рисуется заново (см. msg_catalog_location).
     """
     await state.set_state(CatalogStates.locating)
-    back_label = await t("catalog.nearby.back")
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)],
-            [KeyboardButton(text=back_label)],
-        ],
-        resize_keyboard=True,
-    )
     msg = ctx.message if isinstance(ctx, CallbackQuery) else ctx
     user_id = await upsert_user(ctx.from_user.id, ctx.from_user.username)
-    sent = await msg.answer(await t("catalog.nearby.prompt"), reply_markup=kb)
-    ws.set_active(user_id, sent.message_id)
-    await state.update_data(cat_flt=flt, cat_sort=sort, loc_msg_id=sent.message_id)
+
+    prompt_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=await t("catalog.nearby.back"),
+            callback_data=CatalogCb(action="loc_back").pack(),
+        ),
+    ]])
+    sent_prompt = await msg.answer(await t("catalog.nearby.prompt"), reply_markup=prompt_kb)
+
+    loc_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)]],
+        resize_keyboard=True,
+    )
+    sent_kb = await msg.answer(await t("catalog.nearby.kb_carrier"), reply_markup=loc_kb)
+
+    ws.set_active(user_id, sent_prompt.message_id)
+    await state.update_data(
+        cat_flt=flt, cat_sort=sort,
+        loc_msg_id=sent_prompt.message_id, loc_kb_msg_id=sent_kb.message_id,
+    )
     if isinstance(ctx, CallbackQuery):
         await _delete_messages(ctx.bot, msg.chat.id, [msg.message_id])
         await ctx.answer()
@@ -499,7 +511,7 @@ async def msg_catalog_location(message: Message, state: FSMContext) -> None:
         pass
     await _delete_messages(
         message.bot, message.chat.id,
-        [message.message_id, data.get("loc_msg_id")],
+        [message.message_id, data.get("loc_msg_id"), data.get("loc_kb_msg_id")],
     )
 
 
@@ -519,6 +531,11 @@ async def _cancel_locating(message: Message, state: FSMContext) -> None:
         await removal.delete()
     except TelegramBadRequest:
         pass
+    # Переносчик клавиатуры удаляем, промпт оставляем — каталог рисуется
+    # на его месте (см. prompt_msg_id ниже).
+    await _delete_messages(
+        message.bot, message.chat.id, [data.get("loc_kb_msg_id")],
+    )
     await _render_search_result(
         message, flt=flt, sort=sort, prompt_msg_id=data.get("loc_msg_id"),
     )
@@ -529,9 +546,31 @@ async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
     await _cancel_locating(message, state)
 
 
-@router.message(CatalogStates.locating, F.text == "👈 Назад")
-async def msg_locating_back(message: Message, state: FSMContext) -> None:
-    await _cancel_locating(message, state)
+@router.callback_query(CatalogCb.filter(F.action == "loc_back"))
+async def cb_loc_back(call: CallbackQuery, state: FSMContext) -> None:
+    """«👈 Назад» с промпта запроса локации: гасим state и reply-клавиатуру.
+
+    Промпт (call.message) «превращается» в каталог на месте, отдельное
+    сообщение-переносчик клавиатуры удаляется.
+    """
+    data = await state.get_data()
+    await state.clear()
+    flt = _norm_flt(data.get("cat_flt", FLT_ALL))
+    sort = _norm_sort(data.get("cat_sort", SORT_NAME))
+    # Точки пользователь не дал — сортировку «По расстоянию» нечего показывать
+    # (без точки все магазины попадут в конец "без координат"), откатываемся
+    # на «По названию».
+    if sort == SORT_NEARBY and _point_for(call.from_user.id) is None:
+        sort = SORT_NAME
+    try:
+        removal = await call.message.answer("🗑", reply_markup=ReplyKeyboardRemove())
+        await removal.delete()
+    except TelegramBadRequest:
+        pass
+    await _delete_messages(
+        call.bot, call.message.chat.id, [data.get("loc_kb_msg_id")],
+    )
+    await _render_catalog(call, page=0, flt=flt, sort=sort, state=state)
 
 
 # ---------- Reset ----------

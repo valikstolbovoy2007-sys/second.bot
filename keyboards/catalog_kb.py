@@ -41,7 +41,7 @@ SORT_LABELS: dict[str, str] = {
 
 class CatalogCb(CallbackData, prefix="cat"):
     # action: list | shop | filter | more | sort_open | sort_pick |
-    #         search_start | search_clear | reset | sched | report
+    #         search_start | search_clear | reset | sched | report | loc_back
     action: str
     page: int = 0
     flt: str = FLT_ALL
