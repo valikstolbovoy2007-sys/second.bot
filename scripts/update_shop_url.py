@@ -17,7 +17,7 @@ async def main() -> None:
     if not shop:
         print(f"shop #{shop_id} not found")
         return
-    await update_shop_field(shop_id, {"maps_url": url})
+    await update_shop_field(shop_id, "maps_url", url)
     coords = await resolve_shop_coords(url)
     if coords:
         await set_shop_coords(shop_id, *coords)
