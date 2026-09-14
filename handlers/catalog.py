@@ -232,8 +232,12 @@ async def _ask_location(
     пользователя каталог рисуется заново (см. msg_catalog_location).
     """
     await state.set_state(CatalogStates.locating)
+    back_label = await t("catalog.nearby.back")
     kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)]],
+        keyboard=[
+            [KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)],
+            [KeyboardButton(text=back_label)],
+        ],
         resize_keyboard=True,
     )
     msg = ctx.message if isinstance(ctx, CallbackQuery) else ctx
@@ -499,8 +503,7 @@ async def msg_catalog_location(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(CatalogStates.locating, Command("cancel"))
-async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
+async def _cancel_locating(message: Message, state: FSMContext) -> None:
     """Отмена запроса локации: гасим reply-клавиатуру и возвращаем каталог."""
     data = await state.get_data()
     await state.clear()
@@ -519,6 +522,16 @@ async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
     await _render_search_result(
         message, flt=flt, sort=sort, prompt_msg_id=data.get("loc_msg_id"),
     )
+
+
+@router.message(CatalogStates.locating, Command("cancel"))
+async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
+    await _cancel_locating(message, state)
+
+
+@router.message(CatalogStates.locating, F.text == "👈 Назад")
+async def msg_locating_back(message: Message, state: FSMContext) -> None:
+    await _cancel_locating(message, state)
 
 
 # ---------- Reset ----------
