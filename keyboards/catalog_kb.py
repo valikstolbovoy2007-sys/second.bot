@@ -6,6 +6,7 @@ from services.catalog import (
     FLT_ALL,
     FLT_BY_PRICE,
     FLT_BY_WEIGHT,
+    FLT_NEARBY,
     FLT_TRACKED,
     MORE_FILTERS,
     SORT_ARRIVAL,
@@ -21,6 +22,7 @@ FILTER_LABELS: dict[str, str] = {
     FLT_TRACKED:         "💘 Ну мои",
     FLT_BY_WEIGHT:       "⚖️ По весу",
     FLT_BY_PRICE:        "📌 По цене",
+    FLT_NEARBY:          "📍 По расстоянию",
 }
 
 # Short label for the header (when a non-default filter is active).
@@ -28,6 +30,7 @@ FILTER_SHORT: dict[str, str] = {
     FLT_TRACKED:         "💘 Ну мои",
     FLT_BY_WEIGHT:       "⚖️ По весу",
     FLT_BY_PRICE:        "📌 По цене",
+    FLT_NEARBY:          "📍 По расстоянию",
 }
 
 SORT_LABELS: dict[str, str] = {
@@ -61,14 +64,28 @@ class TrackCb(CallbackData, prefix="trk"):
     sort: str = SORT_NAME
 
 
-def _shop_button_label(shop: Shop, phase_marker: str = "", tracked: bool = False) -> str:
+def _format_km(km: float) -> str:
+    if km < 10:
+        return f"{km:.1f}".replace(".", ",")
+    return f"{km:.0f}"
+
+
+def _shop_button_label(
+    shop: Shop, phase_marker: str = "", tracked: bool = False,
+    distance_km: float | None = None,
+) -> str:
     markers = "".join(m for m in (("" if shop.price_start else "🎩"), phase_marker) if m)
-    prefix = markers + " " if markers else ""
-    star = "💘 " if tracked else ""
+    prefix = ""
+    if distance_km is not None:
+        prefix += f"📍 {_format_km(distance_km)} км "
+    if markers:
+        prefix += markers + " "
+    if tracked:
+        prefix += "💘 "
     name = shop.name
     if shop.chain_name and shop.chain_name not in name:
         name = f"{shop.chain_name}: {name}"
-    return f"{prefix}{star}{name}"[:60]
+    return f"{prefix}{name}"[:60]
 
 
 def catalog_kb(
@@ -81,9 +98,11 @@ def catalog_kb(
     has_search: bool,
     phase_markers: dict[int, str] | None = None,
     tracked_ids: set[int] | None = None,
+    distances: dict[int, float] | None = None,
 ) -> InlineKeyboardMarkup:
     phase_markers = phase_markers or {}
     tracked_ids = tracked_ids or set()
+    distances = distances or {}
     rows: list[list[InlineKeyboardButton]] = []
 
     for shop in shops:
@@ -93,6 +112,7 @@ def catalog_kb(
                     shop,
                     phase_markers.get(shop.id, ""),
                     tracked=shop.id in tracked_ids,
+                    distance_km=distances.get(shop.id),
                 ),
                 callback_data=CatalogCb(
                     action="shop", page=page, flt=flt, sort=sort, shop_id=shop.id,

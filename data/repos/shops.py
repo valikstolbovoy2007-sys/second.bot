@@ -21,6 +21,9 @@ class Shop:
     maps_url: str | None
     monthly_weekday: int | None
     monthly_occurrence: int
+    # Координаты для фильтра «По расстоянию» (см. services.maps).
+    lat: float | None = None
+    lng: float | None = None
 
 
 def _row_to_shop(row) -> Shop:
@@ -39,6 +42,8 @@ def _row_to_shop(row) -> Shop:
         maps_url=row["maps_url"],
         monthly_weekday=row["monthly_weekday"],
         monthly_occurrence=row["monthly_occurrence"],
+        lat=row["lat"],
+        lng=row["lng"],
     )
 
 
@@ -207,7 +212,7 @@ async def update_shop_field(shop_id: int, field: str, value) -> bool:
     allowed = {"name", "address", "description", "chain_name",
                "cycle_length", "anchor_date", "is_active",
                "price_start", "price_step", "working_hours", "maps_url",
-               "monthly_weekday", "monthly_occurrence"}
+               "monthly_weekday", "monthly_occurrence", "lat", "lng"}
     if field not in allowed:
         raise ValueError(f"field {field} not editable")
     async with pool().acquire() as conn:
@@ -220,6 +225,25 @@ async def update_shop_field(shop_id: int, field: str, value) -> bool:
 
 async def deactivate_shop(shop_id: int) -> bool:
     return await update_shop_field(shop_id, "is_active", False)
+
+
+async def set_shop_coords(shop_id: int, lat: float, lng: float) -> bool:
+    """Сохранить координаты магазина (для distance-фильтра)."""
+    async with pool().acquire() as conn:
+        result = await conn.execute(
+            "UPDATE shops SET lat = $2, lng = $3 WHERE id = $1",
+            shop_id, lat, lng,
+        )
+    return result == "UPDATE 1"
+
+
+async def clear_shop_coords(shop_id: int) -> bool:
+    """Стереть координаты — магазин выпадает из distance-фильтра."""
+    async with pool().acquire() as conn:
+        result = await conn.execute(
+            "UPDATE shops SET lat = NULL, lng = NULL WHERE id = $1", shop_id
+        )
+    return result == "UPDATE 1"
 
 
 async def activate_shop(shop_id: int) -> bool:

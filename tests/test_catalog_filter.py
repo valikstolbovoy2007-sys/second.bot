@@ -6,14 +6,18 @@ from services.catalog import (
     FLT_ALL,
     FLT_BY_PRICE,
     FLT_BY_WEIGHT,
+    FLT_NEARBY,
     FLT_TRACKED,
+    NEARBY_MAX_KM,
     SORT_ARRIVAL,
     SORT_NAME,
     SORT_PRICE,
     apply,
     compute_facts,
+    haversine_km,
     matches,
     matches_search,
+    shop_distance_km,
 )
 
 
@@ -29,6 +33,8 @@ def _shop(
     price_step: int | None = 50,
     monthly_weekday: int | None = None,
     monthly_occurrence: int = 1,
+    lat: float | None = None,
+    lng: float | None = None,
 ) -> Shop:
     return Shop(
         id=id, name=name, address=address, description=None,
@@ -40,6 +46,8 @@ def _shop(
         maps_url=None,
         monthly_weekday=monthly_weekday,
         monthly_occurrence=monthly_occurrence,
+        lat=lat,
+        lng=lng,
     )
 
 
@@ -218,6 +226,95 @@ def test_apply_tracked_filter():
         subscribed_ids={2, 3},
     )
     assert [s.name for s in out] == ["B", "C"]
+
+
+# ---------- distance filter (По расстоянию) ----------
+
+
+def test_haversine_known_distance():
+    # Москва → Санкт-Петербург ≈ 630-640 км.
+    d = haversine_km(55.7558, 37.6173, 59.9343, 30.3351)
+    assert 600 < d < 700
+
+
+def test_haversine_same_point_is_zero():
+    assert haversine_km(44.6, 33.5, 44.6, 33.5) < 1e-6
+
+
+def test_shop_distance_km_none_without_coords():
+    today = date(2026, 5, 11)
+    f = compute_facts(_shop(id=1), today)
+    assert shop_distance_km(f.shop, (44.6, 33.5)) is None
+    assert shop_distance_km(f.shop, None) is None
+
+
+def test_nearby_without_point_matches_nothing():
+    today = date(2026, 5, 11)
+    f = compute_facts(_shop(id=1, name="A", lat=44.6, lng=33.5), today)
+    assert matches(f, FLT_NEARBY, is_tracked=False, point=None) is False
+
+
+def test_nearby_shop_without_coords_excluded():
+    today = date(2026, 5, 11)
+    f = compute_facts(_shop(id=1, name="Без координат"), today)
+    assert matches(f, FLT_NEARBY, is_tracked=False, point=(44.6, 33.5)) is False
+
+
+def test_nearby_limits_to_radius():
+    today = date(2026, 5, 11)
+    us = (44.6, 33.5)  # Севастополь
+    near = _shop(id=1, name="Рядом", lat=44.6, lng=33.51)      # ~1 км
+    far = _shop(id=2, name="Далеко", lat=44.6, lng=35.0)       # ~118 км > 100
+    edge_ok = _shop(id=3, name="Граница", lat=44.6, lng=34.4)  # ~71 км < 100
+    out = apply(
+        [near, far, edge_ok], today,
+        flt=FLT_NEARBY, sort=SORT_NAME, search="", subscribed_ids=set(), point=us,
+    )
+    assert {s.name for s in out} == {"Рядом", "Граница"}
+
+
+def test_nearby_sorts_by_distance_ignoring_selected_sort():
+    today = date(2026, 5, 11)
+    us = (44.6, 33.5)
+    a = _shop(id=1, name="A", lat=44.6, lng=34.2)    # ~75 км
+    b = _shop(id=2, name="B", lat=44.6, lng=33.52)   # ~2 км
+    c = _shop(id=3, name="C", lat=44.61, lng=33.50)  # ~1.1 км
+    out = apply(
+        [a, b, c], today,
+        flt=FLT_NEARBY, sort=SORT_NAME, search="", subscribed_ids=set(), point=us,
+    )
+    # SORT_NAME передали намеренно — distance перекрывает сортировку.
+    assert [s.name for s in out] == ["C", "B", "A"]
+
+
+def test_nearby_combines_with_search():
+    today = date(2026, 5, 11)
+    us = (44.6, 33.5)
+    keep = _shop(id=1, name="Megahand A", lat=44.6, lng=33.52)
+    drop = _shop(id=2, name="Other", lat=44.6, lng=33.53)
+    out = apply(
+        [keep, drop], today,
+        flt=FLT_NEARBY, sort=SORT_NAME, search="megahand", subscribed_ids=set(), point=us,
+    )
+    assert [s.name for s in out] == ["Megahand A"]
+
+
+def test_catalog_kb_nearby_label_shows_distance():
+    from keyboards.catalog_kb import catalog_kb
+
+    s = _shop(id=1, name="Евро", lat=44.6, lng=33.5)
+    kb = catalog_kb(
+        [s], 0, FLT_NEARBY, SORT_NAME, 1, has_search=False,
+        distances={1: 2.34},
+    )
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("📍 2,3 км" in t for t in texts)
+    assert any("Евро" in t for t in texts)
+
+    # Без distance-режима дистанция в подписи не появляется.
+    kb_plain = catalog_kb([s], 0, FLT_ALL, SORT_NAME, 1, has_search=False)
+    texts_plain = [b.text for row in kb_plain.inline_keyboard for b in row]
+    assert not any("км" in t for t in texts_plain)
 
 
 # ---------- payload wiring: tg-id vs db-id ----------

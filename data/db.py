@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS shops (
     -- Свободный текст: «Пн-Сб 10:00–21:00, Вс выходной» и т.п.
     -- Не парсим в дни/часы — слишком разнообразные форматы у секондов.
     working_hours TEXT,
+    -- Координаты для фильтра «По расстоянию». Заполняются из ссылки
+    -- Яндекс.Карт (см. services.maps.resolve_shop_coords). NULL — магазин
+    -- не участвует в distance-фильтре.
+    lat           DOUBLE PRECISION,
+    lng           DOUBLE PRECISION,
     is_active     BOOLEAN NOT NULL DEFAULT true
 );
 
@@ -218,6 +223,9 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_start INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_step  INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS working_hours TEXT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS maps_url TEXT;
+-- Координаты для distance-фильтра (см. services.maps.resolve_shop_coords).
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
 -- Магазины с завозом «в первый день недели месяца» (например, первый
 -- четверг): 0=Пн..6=Вс, NULL — обычный режим с фиксированным cycle_length.
 -- Cycle/anchor для таких магазинов пересчитываются на лету от today(),

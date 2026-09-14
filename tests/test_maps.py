@@ -5,9 +5,53 @@ from urllib.parse import parse_qs, urlparse
 
 from services.maps import (
     DEFAULT_CITY,
+    extract_coords_from_url,
     yandex_maps_link_html,
     yandex_maps_url,
 )
+
+
+# ---------- extract_coords_from_url ----------
+
+
+def test_extract_coords_from_ll_param():
+    url = "https://yandex.ru/maps/?ll=33.525400%2C44.616600&z=17"
+    assert extract_coords_from_url(url) == (44.616600, 33.525400)
+
+
+def test_extract_coords_from_pt_param():
+    # pt — метка, приоритетнее ll.
+    url = "https://yandex.ru/maps/?ll=30.0%2C60.0&pt=33.5%2C44.6&z=17"
+    assert extract_coords_from_url(url) == (44.6, 33.5)
+
+
+def test_extract_coords_prefers_pt_over_sll():
+    url = "https://yandex.ru/maps/?sll=10%2C20&pt=33.5%2C44.6"
+    assert extract_coords_from_url(url) == (44.6, 33.5)
+
+
+def test_extract_coords_from_our_own_pin_url_built_by_our_url_builder():
+    built = yandex_maps_url("ignored", lat=44.6166, lon=33.5254)
+    assert extract_coords_from_url(built) == (44.6166, 33.5254)
+
+
+def test_extract_coords_ignores_routes_share():
+    # «Сток (Проспект Победы)» — route-share: ll это центр карты, а не точка.
+    url = "https://yandex.ru/maps/?ll=33.5%2C44.6&mode=routes&rtext=44.6014%2C33.5224~44.5600%2C33.4560"
+    assert extract_coords_from_url(url) is None
+
+
+def test_extract_coords_multiple_pt_takes_first():
+    url = "https://yandex.ru/maps/?pt=33.5%2C44.6~33.6%2C44.7&z=16"
+    assert extract_coords_from_url(url) == (44.6, 33.5)
+
+
+def test_extract_coords_empty_or_broken_returns_none():
+    assert extract_coords_from_url("https://yandex.ru/maps/org/foo/123") is None
+    assert extract_coords_from_url("https://yandex.ru/maps/") is None
+    assert extract_coords_from_url("") is None
+    assert extract_coords_from_url("https://yandex.ru/maps/?ll=abc%2Cdef") is None
+    assert extract_coords_from_url("https://yandex.ru/maps/?ll=999%2C999") is None
 
 
 # ---------- yandex_maps_url ----------

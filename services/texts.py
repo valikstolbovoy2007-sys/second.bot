@@ -112,6 +112,13 @@ DEFAULTS: dict[str, str] = {
         "Пришли текст — найду по названию, адресу или сети.\n"
         "<i>Отменить — /cancel</i>"
     ),
+    "catalog.nearby.button": "📍 Поделиться местоположением",
+    "catalog.nearby.prompt": (
+        "📍 <b>Где ты сейчас?</b>\n"
+        "\n"
+        "Нажми кнопку — поделюсь координатами. Покажу магазины "
+        "в радиусе 100 км, самые близкие сверху."
+    ),
 
     # my shops
     "myshops.title":           "💘 <b>Ну мои</b>",
@@ -198,6 +205,8 @@ DESCRIPTIONS: dict[str, str] = {
     "catalog.more_title":     "Заголовок экрана «Дополнительные фильтры»",
     "catalog.sort_title":     "Заголовок экрана «Сортировка»",
     "catalog.search.prompt":  "Подсказка на экране ввода поискового запроса",
+    "catalog.nearby.button":  "Кнопка reply-клавиатуры для запроса геолокации",
+    "catalog.nearby.prompt":  "Подсказка перед запросом геолокации (фильтр «По расстоянию»)",
 
     "myshops.title":           "Заголовок раздела «Ну мои»",
     "myshops.empty":           "Текст когда у пользователя нет отслеживаемых магазинов",
@@ -211,18 +220,11 @@ DESCRIPTIONS: dict[str, str] = {
 
     "settings.title":            "Заголовок экрана настроек",
     "settings.notify_title":     "Заголовок подменю «Настройка уведомлений»",
-    "settings.notify_time":      "Строка с текущим временем уведомлений",
     "settings.pause_active":     "Строка когда активна пауза",
     "settings.pause_off":        "Строка когда уведомления включены",
-    "settings.time_picker":      "Подсказка на экране выбора времени",
-    "settings.time_saved":       "Тост после сохранения времени",
     "settings.pause_picker":     "Подсказка на экране выбора длительности паузы",
     "settings.pause_off_done":   "Тост после снятия паузы",
     "settings.pause_set_done":   "Тост после установки паузы",
-    "settings.shop_notif_title": "Заголовок экрана настроек уведомлений магазина",
-    "settings.shop_notif_cycle": "Подсказка для магазина с циклом",
-    "settings.shop_notif_wdays": "Подсказка для магазина без цикла (дни недели)",
-    "settings.need_track":       "Алерт «надо сначала отслеживать»",
     "settings.toggle_on":        "Тост-подтверждение «Включено»",
     "settings.toggle_off":       "Тост-подтверждение «Выключено»",
 
@@ -244,6 +246,7 @@ GROUPS: list[tuple[str, str, list[str]]] = [
         "catalog.title", "catalog.found", "catalog.hint", "catalog.legend",
         "catalog.empty", "catalog.empty_filter", "catalog.shop_not_found",
         "catalog.more_title", "catalog.sort_title", "catalog.search.prompt",
+        "catalog.nearby.button", "catalog.nearby.prompt",
     ]),
     ("myshops", "Мои магазины", [
         "myshops.title", "myshops.empty", "myshops.list_header",
@@ -252,12 +255,10 @@ GROUPS: list[tuple[str, str, list[str]]] = [
         "myshops.sub_all_done", "myshops.sub_all_already",
     ]),
     ("settings","Настройки", [
-        "settings.title", "settings.notify_title", "settings.notify_time",
+        "settings.title", "settings.notify_title",
         "settings.pause_active", "settings.pause_off",
-        "settings.time_picker", "settings.time_saved",
         "settings.pause_picker", "settings.pause_off_done", "settings.pause_set_done",
-        "settings.shop_notif_title", "settings.shop_notif_cycle", "settings.shop_notif_wdays",
-        "settings.need_track", "settings.toggle_on", "settings.toggle_off",
+        "settings.toggle_on", "settings.toggle_off",
     ]),
     ("system",  "Обслуживание и ошибки", [
         "system.too_fast", "system.unhandled_button", "system.shop_not_found",

@@ -6,7 +6,14 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from data.repos.shops import Shop, get_shop, list_active_shops
 from data.repos.subs import is_subscribed, subscribed_shop_ids
@@ -30,10 +37,12 @@ from services.maps import yandex_maps_url
 from services.workspace import ws
 from services.catalog import (
     FLT_ALL,
+    FLT_NEARBY,
     SORT_NAME,
     VALID_FILTERS,
     VALID_SORTS,
     apply,
+    shop_distance_km,
 )
 from services.texts import t
 from states.catalog_states import CatalogStates
@@ -45,6 +54,11 @@ router = Router(name="catalog")
 # Ephemeral by design — search is cleared on bot restart, which is fine.
 _user_search: dict[int, str] = {}
 _MAX_SEARCH_LEN = 60
+
+# In-memory map: telegram user_id → последние переданные координаты (lat, lon).
+# Использует только distance-фильтр; переспрашиваем локацию при каждой
+# АКТИВАЦИИ фильтра (см. cb_filter), между её активациями точка живёт в памяти.
+_user_location: dict[int, tuple[float, float]] = {}
 
 
 def _phase_markers(shops: list[Shop], today: date) -> dict[int, str]:
@@ -84,11 +98,15 @@ async def _build_header(
 
 async def _catalog_payload(
     user_id: int, tg_id: int, *, page: int, flt: str, sort: str,
+    point: tuple[float, float] | None = None,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """(текст, клавиатура) экрана списка каталога (включая пустой случай).
 
     user_id — id юзера в БД (для подписок), tg_id — телеграм-id (ключ
     активного поиска, т.к. поиск хранится в памяти под tg-id).
+
+    `point` — (lat, lon) для distance-фильтра; без него FLT_NEARBY даёт
+    пустой результат.
     """
     flt = _norm_flt(flt)
     sort = _norm_sort(sort)
@@ -101,6 +119,7 @@ async def _catalog_payload(
         all_shops, today,
         flt=flt, sort=sort, search=search,
         subscribed_ids=sub_ids,
+        point=point,
     )
 
     total = len(filtered)
@@ -115,12 +134,20 @@ async def _catalog_payload(
     page_shops = filtered[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
     markers = _phase_markers(page_shops, today)
 
+    distances: dict[int, float] | None = None
+    if flt == FLT_NEARBY and point is not None:
+        distances = {
+            s.id: d for s in page_shops
+            if (d := shop_distance_km(s, point)) is not None
+        }
+
     body = await _build_header(total=total, flt=flt, sort=sort, search=search)
     kb = catalog_kb(
         page_shops, page, flt, sort, total,
         has_search=bool(search),
         phase_markers=markers,
         tracked_ids=sub_ids,
+        distances=distances,
     )
     return body, kb
 
@@ -131,10 +158,19 @@ async def _render_catalog(
     page: int,
     flt: str,
     sort: str,
+    state: FSMContext | None = None,
 ) -> None:
+    if flt == FLT_NEARBY:
+        point = _point_for(call.from_user.id)
+        if point is None:
+            await _ask_location(call, flt=flt, sort=sort, state=state)
+            return
+    else:
+        point = None
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     body, kb = await _catalog_payload(
         user_id, tg_id=call.from_user.id, page=page, flt=flt, sort=sort,
+        point=point,
     )
     await show_text_view(call, body, kb)
     await call.answer()
@@ -142,11 +178,20 @@ async def _render_catalog(
 
 async def _close_card_back_to_catalog(
     call: CallbackQuery, user_id: int, *, page: int, flt: str, sort: str,
+    state: FSMContext | None = None,
 ) -> None:
     """«Назад» с карточки: список появляется, затем карточка удаляется."""
+    if flt == FLT_NEARBY:
+        point = _point_for(call.from_user.id)
+        if point is None:
+            await _ask_location(call, flt=flt, sort=sort, state=state)
+            return
+    else:
+        point = None
     ws.close_card(user_id)
     body, kb = await _catalog_payload(
         user_id, tg_id=call.from_user.id, page=page, flt=flt, sort=sort,
+        point=point,
     )
     sent = await call.bot.send_message(
         call.message.chat.id, body,
@@ -163,6 +208,44 @@ async def _close_card_back_to_catalog(
 # ---------- entry points ----------
 
 
+def _point_for(tg_id: int) -> tuple[float, float] | None:
+    return _user_location.get(tg_id)
+
+
+async def _delete_messages(bot, chat_id: int, msg_ids: list[int | None]) -> None:
+    for msg_id in msg_ids:
+        if msg_id is None:
+            continue
+        try:
+            await bot.delete_message(chat_id, msg_id)
+        except TelegramBadRequest:
+            pass
+
+
+async def _ask_location(
+    ctx: CallbackQuery | Message, *, flt: str, sort: str, state: FSMContext | None,
+) -> None:
+    """Перевести каталог в состояние запроса геолокации.
+
+    Активный экран (список/карточка) удаляется, вместо него — отдельное
+    сообщение с reply-клавиатурой «Поделиться местоположением». После ответа
+    пользователя каталог рисуется заново (см. msg_catalog_location).
+    """
+    await state.set_state(CatalogStates.locating)
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=await t("catalog.nearby.button"), request_location=True)]],
+        resize_keyboard=True,
+    )
+    msg = ctx.message if isinstance(ctx, CallbackQuery) else ctx
+    user_id = await upsert_user(ctx.from_user.id, ctx.from_user.username)
+    sent = await msg.answer(await t("catalog.nearby.prompt"), reply_markup=kb)
+    ws.set_active(user_id, sent.message_id)
+    await state.update_data(cat_flt=flt, cat_sort=sort, loc_msg_id=sent.message_id)
+    if isinstance(ctx, CallbackQuery):
+        await _delete_messages(ctx.bot, msg.chat.id, [msg.message_id])
+        await ctx.answer()
+
+
 @router.callback_query(F.data == "catalog:open")
 async def cb_open(call: CallbackQuery) -> None:
     # Явное открытие каталога из главного меню — всегда «свежий» каталог:
@@ -172,25 +255,31 @@ async def cb_open(call: CallbackQuery) -> None:
 
 
 @router.callback_query(CatalogCb.filter(F.action == "list"))
-async def cb_list(call: CallbackQuery, callback_data: CatalogCb) -> None:
+async def cb_list(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     if ws.card(user_id) == call.message.message_id:
         # Пришли «Назад» с открытой карточки — закрываем её, список остаётся.
         await _close_card_back_to_catalog(
             call, user_id,
             page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
+            state=state,
         )
         return
     await _render_catalog(
         call, page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
+        state=state,
     )
 
 
 @router.callback_query(CatalogCb.filter(F.action == "filter"))
-async def cb_filter(call: CallbackQuery, callback_data: CatalogCb) -> None:
-    await _render_catalog(
-        call, page=0, flt=callback_data.flt, sort=callback_data.sort,
-    )
+async def cb_filter(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
+    flt = callback_data.flt
+    if flt == FLT_NEARBY:
+        # Активация distance-фильтра — всегда переспрашиваем локацию, чтобы
+        # каталог строился от текущего положения, а не от вчерашнего.
+        await _ask_location(call, flt=FLT_NEARBY, sort=_norm_sort(callback_data.sort), state=state)
+        return
+    await _render_catalog(call, page=0, flt=flt, sort=callback_data.sort, state=state)
 
 
 # ---------- shop card / schedule ----------
@@ -271,9 +360,9 @@ async def cb_sort_open(call: CallbackQuery, callback_data: CatalogCb) -> None:
 
 
 @router.callback_query(CatalogCb.filter(F.action == "sort_pick"))
-async def cb_sort_pick(call: CallbackQuery, callback_data: CatalogCb) -> None:
+async def cb_sort_pick(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
     new_sort = _norm_sort(callback_data.value or SORT_NAME)
-    await _render_catalog(call, page=0, flt=callback_data.flt, sort=new_sort)
+    await _render_catalog(call, page=0, flt=callback_data.flt, sort=new_sort, state=state)
 
 
 # ---------- Search ----------
@@ -306,7 +395,10 @@ async def msg_search_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     _user_search.pop(message.from_user.id, None)
     # Ввод пользователя удаляется, экран поиска снова становится каталогом.
-    await _render_search_result(message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"))
+    await _render_search_result(
+        message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"),
+        state=state,
+    )
 
 
 @router.message(CatalogStates.searching, F.text)
@@ -322,20 +414,29 @@ async def msg_search_query(message: Message, state: FSMContext) -> None:
         _user_search[message.from_user.id] = query
     # Ввод пользователя удаляется, экран поиска снова становится каталогом
     # уже с применённым поиском.
-    await _render_search_result(message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"))
+    await _render_search_result(
+        message, flt=flt, sort=sort, prompt_msg_id=data.get("search_msg_id"),
+        state=state,
+    )
 
 
 async def _render_search_result(
     message: Message, *, flt: str, sort: str, prompt_msg_id: int | None,
+    state: FSMContext | None = None,
 ) -> None:
     """Удалить ввод пользователя и на месте промпта нарисовать каталог."""
     try:
         await message.delete()
     except TelegramBadRequest:
         pass
+    if flt == FLT_NEARBY:
+        point = _point_for(message.from_user.id)
+    else:
+        point = None
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     body, kb = await _catalog_payload(
         user_id, tg_id=message.from_user.id, page=0, flt=flt, sort=sort,
+        point=point,
     )
     if prompt_msg_id is not None:
         new_id = await render(message.bot, message.chat.id, prompt_msg_id, body, kb)
@@ -346,10 +447,10 @@ async def _render_search_result(
 
 
 @router.callback_query(CatalogCb.filter(F.action == "search_clear"))
-async def cb_search_clear(call: CallbackQuery, callback_data: CatalogCb) -> None:
+async def cb_search_clear(call: CallbackQuery, callback_data: CatalogCb, state: FSMContext) -> None:
     _user_search.pop(call.from_user.id, None)
     await _render_catalog(
-        call, page=0, flt=callback_data.flt, sort=callback_data.sort,
+        call, page=0, flt=callback_data.flt, sort=callback_data.sort, state=state,
     )
 
 
@@ -361,7 +462,54 @@ async def cb_search_cancel(
     await state.clear()
     _user_search.pop(call.from_user.id, None)
     await _render_catalog(
-        call, page=0, flt=callback_data.flt, sort=callback_data.sort,
+        call, page=0, flt=callback_data.flt, sort=callback_data.sort, state=state,
+    )
+
+
+# ---------- Distance filter: location flow ----------
+
+
+@router.message(CatalogStates.locating, F.location)
+async def msg_catalog_location(message: Message, state: FSMContext) -> None:
+    """Пользователь нажал «Поделиться местоположением» — рисуем каталог."""
+    data = await state.get_data()
+    await state.clear()
+    point = (message.location.latitude, message.location.longitude)
+    _user_location[message.from_user.id] = point
+    flt = FLT_NEARBY
+    sort = _norm_sort(data.get("cat_sort", SORT_NAME))
+    user_id = await upsert_user(message.from_user.id, message.from_user.username)
+    body, kb = await _catalog_payload(
+        user_id, tg_id=message.from_user.id, page=0, flt=flt, sort=sort,
+        point=point,
+    )
+    sent = await message.answer(body, reply_markup=kb, disable_web_page_preview=True)
+    ws.set_active(user_id, sent.message_id)
+    await _delete_messages(
+        message.bot, message.chat.id,
+        [message.message_id, data.get("loc_msg_id")],
+    )
+
+
+@router.message(CatalogStates.locating, Command("cancel"))
+async def msg_locating_cancel(message: Message, state: FSMContext) -> None:
+    """Отмена запроса локации: гасим reply-клавиатуру и возвращаем каталог."""
+    data = await state.get_data()
+    await state.clear()
+    flt = _norm_flt(data.get("cat_flt", FLT_ALL))
+    sort = _norm_sort(data.get("cat_sort", SORT_NAME))
+    # Точки пользователь не дал — distance-фильтр нечего показывать,
+    # возвращаем полный каталог (иначе флоу «запросили и передумали» дал
+    # бы пустой экран).
+    if flt == FLT_NEARBY and _point_for(message.from_user.id) is None:
+        flt = FLT_ALL
+    try:
+        removal = await message.answer("🗑", reply_markup=ReplyKeyboardRemove())
+        await removal.delete()
+    except TelegramBadRequest:
+        pass
+    await _render_search_result(
+        message, flt=flt, sort=sort, prompt_msg_id=data.get("loc_msg_id"),
     )
 
 

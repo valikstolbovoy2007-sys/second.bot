@@ -51,6 +51,10 @@ FIELDS = {
     # Сеть. Принимает любой текст; «-» / «—» / пусто = сделать магазин
     # независимым (NULL в БД). Длина 50 — с запасом на новые сети.
     "chain_name": ("Сеть (или «-» для независимого)", 50),
+    # Ссылка «поделиться» из Яндекс.Карт. После сохранения из неё извлекаются
+    # координаты для distance-фильтра (см. services.maps) — процесс асинхронный,
+    # поэтому финальное сообщение показывает результат через resolve_shop_coords.
+    "maps_url": ("Ссылка Яндекс.Карт (https://yandex.ru/maps/-/...) — «-» очистить", 300),
 }
 
 
@@ -167,6 +171,7 @@ def _card_kb(shop_id: int, page: int, is_active: bool, is_super: bool) -> Inline
         [edit_btn("✏️ Описание", "description")],
         [edit_btn("✏️ Цикл", "cycle"), edit_btn("✏️ Anchor", "anchor")],
         [edit_btn("💰 Цена/кг", "price_start"), edit_btn("📉 Шаг ₽/день", "price_step")],
+        [edit_btn("🗺 Ссылка Карт", "maps_url")],
         [
             InlineKeyboardButton(
                 text="📷 Фото",
@@ -503,6 +508,9 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
             await err("⚠️ Введи целое неотрицательное число.")
             return
         value = n
+    elif field == "maps_url":
+        # «-» / «—» / пусто — очистить ссылку (и координаты).
+        value = None if raw in ("", "-", "—") else raw
 
     shop_before = await get_shop(shop_id)
     ok = await update_shop_field(shop_id, db_field, value)
@@ -510,6 +518,21 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
         await state.clear()
         await err("Не удалось обновить.")
         return
+    # После правки ссылки зовём геокодер — чтобы distance-фильтр не протух.
+    if db_field == "maps_url":
+        try:
+            from data.repos.shops import clear_shop_coords, set_shop_coords
+            from services.maps import resolve_shop_coords
+            if value:
+                coords = await resolve_shop_coords(str(value))
+                if coords:
+                    await set_shop_coords(shop_id, *coords)
+                else:
+                    await clear_shop_coords(shop_id)
+            else:
+                await clear_shop_coords(shop_id)
+        except Exception:
+            log.exception("geocode after maps_url edit failed")
     if field in ("cycle", "anchor") and shop_before and shop_before.monthly_weekday is not None:
         # Manually typing a cycle length/date means "go back to fixed mode" —
         # otherwise monthly_weekday would keep overriding what was just set.
