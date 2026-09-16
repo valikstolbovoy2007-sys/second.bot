@@ -69,7 +69,7 @@ def format_shop_message(trigger: Trigger) -> str:
         else:
             line = "💰 Завтра самый дешёвый день"
     else:
-        line = "🚚 Сегодня завоз — завтра самая дорогая цена"
+        line = "🚚 Завтра день завоза — самая дорогая цена"
     lines = [
         f"🔔 <b>{html.escape(trigger.shop_name)}</b>",
         line,

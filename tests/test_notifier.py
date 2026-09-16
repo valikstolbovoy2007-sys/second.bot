@@ -43,7 +43,7 @@ class TestFormatShopMessage:
     def test_single_trigger(self) -> None:
         trig = Trigger(1, "Megahand", "пр. Острякова 65А", "arrival", lead_days=0)
         msg = format_shop_message(trig)
-        assert "🚚 Сегодня завоз" in msg
+        assert "🚚 Завтра день завоза" in msg
         assert "Megahand" in msg
         assert "пр. Острякова 65А" in msg
 
@@ -95,7 +95,7 @@ class TestRunForMinute:
             bot.send_message.assert_called_once()
             tg_id, text = bot.send_message.call_args[0]
             assert tg_id == 555
-            assert "🚚 Сегодня завоз" in text
+            assert "🚚 Завтра день завоза" in text
             mark_sent_mock.assert_called_once_with(1, [(1, "arrival")], date(2026, 4, 15))
 
     def test_cheap_day_fires_tow_days_before_arrival_at_9am(self) -> None:
