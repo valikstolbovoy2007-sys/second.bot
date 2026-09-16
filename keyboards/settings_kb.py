@@ -38,11 +38,11 @@ def settings_menu_kb(pause_until: date | None) -> InlineKeyboardMarkup:
 def notify_settings_kb(notify_arrival: bool, notify_cheap_day: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"{_mark(notify_arrival)} 🚚 Уведомлять о завозе (за день, в 9:00)",
+            text=f"{_mark(notify_arrival)} 🚚 Уведомлять о завозе (в день завоза, 9:00)",
             callback_data=SettingsCb(action="toggle_arrival").pack(),
         )],
         [InlineKeyboardButton(
-            text=f"{_mark(notify_cheap_day)} 💰 Уведомлять о дешёвом дне (в 9:00)",
+            text=f"{_mark(notify_cheap_day)} 💰 Уведомлять о дешёвом дне (за 2 дня, 9:00)",
             callback_data=SettingsCb(action="toggle_cheap").pack(),
         )],
         [InlineKeyboardButton(text="◀️ Назад", callback_data=SettingsCb(action="open").pack())],

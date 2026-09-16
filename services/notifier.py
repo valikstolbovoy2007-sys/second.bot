@@ -14,19 +14,21 @@ from data.repos.notifier_repo import (
     mark_sent,
 )
 from services.chat_journal import journal
-from services.cycle import EventType, days_until, humanize_days, resolve_cycle_info
+from services.cycle import EventType, days_until, next_event_date, resolve_cycle_info
 
 log = logging.getLogger(__name__)
 
 NOTIFY_AT = time(9, 0)
-ARRIVAL_LEAD_DAYS = 1
-CHEAP_DAY_LEAD_DAYS = 0
+# День дешёвой цены — это день перед завозом. Чтобы уведомления не падали в
+# один день: о дешёвом дне пишем за день до него (за 2 дня до завоза),
+# о завозе — в день завоза.
+ARRIVAL_LEAD_DAYS = 0
+CHEAP_DAY_LEAD_DAYS = 1
 
-EVENT_HEADERS: dict[str, str] = {
-    "arrival": "🚚 Завоз",
-    "cheap_day": "💰 Дешёвый день",
-}
-EVENT_ORDER: list[str] = ["arrival", "cheap_day"]
+_RU_WEEKDAYS = [
+    "Понедельник", "Вторник", "Среда", "Четверг",
+    "Пятница", "Суббота", "Воскресенье",
+]
 
 # Кэш username бота для deep-ссылок. Устанавливается один раз при старте.
 _bot_username: str | None = None
@@ -48,6 +50,7 @@ class Trigger:
     address: str
     event_type: str
     lead_days: int = 0  # 0 = "сегодня"; 1 = "завтра", etc.
+    arrival_weekday: str | None = None
 
 
 def _shop_deep_link(shop_id: int) -> str | None:
@@ -59,11 +62,17 @@ def _shop_deep_link(shop_id: int) -> str | None:
 
 def format_shop_message(trigger: Trigger) -> str:
     """Одно уведомление: один магазин, одно событие + deep link."""
-    when = humanize_days(trigger.lead_days)
     link = _shop_deep_link(trigger.shop_id)
+    if trigger.event_type == "cheap_day":
+        if trigger.arrival_weekday:
+            line = f"💰 Завтра самый дешёвый день (завоз в {trigger.arrival_weekday})"
+        else:
+            line = "💰 Завтра самый дешёвый день"
+    else:
+        line = "🚚 Сегодня завоз — завтра самая дорогая цена"
     lines = [
         f"🔔 <b>{html.escape(trigger.shop_name)}</b>",
-        f"{EVENT_HEADERS[trigger.event_type]} {when}",
+        line,
         f"📍 {html.escape(trigger.address)}",
     ]
     if link:
@@ -99,10 +108,14 @@ async def run_for_minute(bot: Bot, when: datetime) -> None:
                 shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
                 event_type="arrival", lead_days=ARRIVAL_LEAD_DAYS,
             ))
+        # Уведомление о дешёвом дне: «завтра самый дешёвый день». Завоз приходит
+        # на следующий день после дешёвого — weekday нужен для текста уведомления.
         if row["notify_cheap_day"] and days_until(today, info, EventType.MAX_DISCOUNT) == CHEAP_DAY_LEAD_DAYS:
+            arrival_date = next_event_date(today, info, EventType.ARRIVAL)
             by_user.setdefault(user_id, []).append(Trigger(
                 shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
                 event_type="cheap_day", lead_days=CHEAP_DAY_LEAD_DAYS,
+                arrival_weekday=_RU_WEEKDAYS[arrival_date.weekday()],
             ))
 
     for user_id, triggers in by_user.items():

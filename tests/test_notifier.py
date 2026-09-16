@@ -41,18 +41,18 @@ class TestFormatShopMessage:
         set_bot_username(None)
 
     def test_single_trigger(self) -> None:
-        trig = Trigger(1, "Megahand", "пр. Острякова 65А", "arrival", lead_days=1)
+        trig = Trigger(1, "Megahand", "пр. Острякова 65А", "arrival", lead_days=0)
         msg = format_shop_message(trig)
-        assert "🚚 Завоз" in msg
+        assert "🚚 Сегодня завоз" in msg
         assert "Megahand" in msg
         assert "пр. Острякова 65А" in msg
-        assert "завтра" in msg
 
-    def test_cheap_day_lead_today(self) -> None:
-        trig = Trigger(1, "Megahand", "адрес", "cheap_day", lead_days=0)
+    def test_cheap_day_notice_mentions_weekday(self) -> None:
+        trig = Trigger(1, "Megahand", "адрес", "cheap_day", lead_days=1,
+                       arrival_weekday="Четверг")
         msg = format_shop_message(trig)
-        assert "💰 Дешёвый день" in msg
-        assert "сегодня" in msg
+        assert "💰 Завтра самый дешёвый день" in msg
+        assert "завоз в Четверг" in msg
 
     def test_html_escapes_shop_name(self) -> None:
         trig = Trigger(1, "<script>", "адрес", "arrival", lead_days=1)
@@ -83,34 +83,38 @@ class TestRunForMinute:
             fetch_mock.assert_not_called()
             bot.send_message.assert_not_called()
 
-    def test_arrival_fires_one_day_before_at_9am(self) -> None:
-        # anchor Apr 1, cycle 14 -> arrival Apr 15; one day before = Apr 14.
+    def test_arrival_fires_on_arrival_day_at_9am(self) -> None:
+        # anchor Apr 1, cycle 14 -> arrival Apr 15; fires that very day.
         row = _row(notify_cheap_day=False)
         with patch("services.notifier.fetch_notify_candidates", new=AsyncMock(return_value=[row])), \
              patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
              patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
             bot = AsyncMock()
-            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            when = datetime.combine(date(2026, 4, 15), NOTIFY_AT)
             asyncio.run(run_for_minute(bot, when))
             bot.send_message.assert_called_once()
             tg_id, text = bot.send_message.call_args[0]
             assert tg_id == 555
-            assert "🚚 Завоз" in text
-            mark_sent_mock.assert_called_once_with(1, [(1, "arrival")], date(2026, 4, 14))
+            assert "🚚 Сегодня завоз" in text
+            mark_sent_mock.assert_called_once_with(1, [(1, "arrival")], date(2026, 4, 15))
 
-    def test_cheap_day_fires_same_day_at_9am(self) -> None:
+    def test_cheap_day_fires_tow_days_before_arrival_at_9am(self) -> None:
         # max_discount day = last day of cycle = Apr 14 (day 13 of 0..13).
+        # The notification fires one day before that, i.e. Apr 13 — that is
+        # two days before the Apr 15 arrival.
         row = _row(notify_arrival=False)
         with patch("services.notifier.fetch_notify_candidates", new=AsyncMock(return_value=[row])), \
              patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
              patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
             bot = AsyncMock()
-            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            when = datetime.combine(date(2026, 4, 13), NOTIFY_AT)
             asyncio.run(run_for_minute(bot, when))
             bot.send_message.assert_called_once()
             _tg_id, text = bot.send_message.call_args[0]
-            assert "💰 Дешёвый день" in text
-            mark_sent_mock.assert_called_once_with(1, [(1, "cheap_day")], date(2026, 4, 14))
+            assert "💰 Завтра самый дешёвый день" in text
+            # arrival Apr 15 2026 is a Wednesday.
+            assert "завоз в Среда" in text
+            mark_sent_mock.assert_called_once_with(1, [(1, "cheap_day")], date(2026, 4, 13))
 
     def test_two_shops_same_user_send_two_messages(self) -> None:
         row_a = _row(user_id=1, tg_id=555, shop_id=1, name="Shop A", notify_cheap_day=False)
@@ -120,7 +124,7 @@ class TestRunForMinute:
              patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
              patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
             bot = AsyncMock()
-            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            when = datetime.combine(date(2026, 4, 15), NOTIFY_AT)
             asyncio.run(run_for_minute(bot, when))
             assert bot.send_message.call_count == 2
             texts = [c.args[1] for c in bot.send_message.call_args_list]
@@ -128,7 +132,7 @@ class TestRunForMinute:
             assert any("Shop B" in t for t in texts)
             # Каждое (shop_id, event_type) маркируется отдельно.
             mark_sent_mock.assert_called_once_with(
-                1, [(1, "arrival"), (2, "arrival")], date(2026, 4, 14),
+                1, [(1, "arrival"), (2, "arrival")], date(2026, 4, 15),
             )
 
     def test_no_cycle_shop_produces_no_trigger(self) -> None:
@@ -137,7 +141,7 @@ class TestRunForMinute:
              patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
              patch("services.notifier.mark_sent", new=AsyncMock()):
             bot = AsyncMock()
-            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            when = datetime.combine(date(2026, 4, 15), NOTIFY_AT)
             asyncio.run(run_for_minute(bot, when))
             bot.send_message.assert_not_called()
 
@@ -147,13 +151,13 @@ class TestRunForMinute:
              patch("services.notifier.already_sent", new=AsyncMock(return_value={(1, "arrival")})), \
              patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
             bot = AsyncMock()
-            when = datetime.combine(date(2026, 4, 14), NOTIFY_AT)
+            when = datetime.combine(date(2026, 4, 15), NOTIFY_AT)
             asyncio.run(run_for_minute(bot, when))
             bot.send_message.assert_not_called()
             mark_sent_mock.assert_not_called()
 
 
 def test_lead_day_constants_match_spec() -> None:
-    assert ARRIVAL_LEAD_DAYS == 1
-    assert CHEAP_DAY_LEAD_DAYS == 0
+    assert ARRIVAL_LEAD_DAYS == 0
+    assert CHEAP_DAY_LEAD_DAYS == 1
     assert NOTIFY_AT == time(9, 0)
