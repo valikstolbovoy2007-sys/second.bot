@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from services.notifier import (
     ARRIVAL_LEAD_DAYS,
     CHEAP_DAY_LEAD_DAYS,
+    MIDDLE_LEAD_DAYS,
     NOTIFY_AT,
     Trigger,
     format_shop_message,
@@ -28,6 +29,7 @@ def _row(**overrides) -> dict:
         "monthly_occurrence": 1,
         "notify_arrival": True,
         "notify_cheap_day": True,
+        "notify_middle": True,
     }
     base.update(overrides)
     return base
@@ -53,6 +55,11 @@ class TestFormatShopMessage:
         msg = format_shop_message(trig)
         assert "💰 Завтра самый дешёвый день" in msg
         assert "завоз в Четверг" in msg
+
+    def test_middle_cycle_message(self) -> None:
+        trig = Trigger(1, "Megahand", "адрес", "middle", lead_days=0)
+        msg = format_shop_message(trig)
+        assert "⚖️ Сегодня середина цикла" in msg
 
     def test_html_escapes_shop_name(self) -> None:
         trig = Trigger(1, "<script>", "адрес", "arrival", lead_days=1)
@@ -135,6 +142,30 @@ class TestRunForMinute:
                 1, [(1, "arrival"), (2, "arrival")], date(2026, 4, 15),
             )
 
+    def test_middle_fires_on_middle_day_at_9am(self) -> None:
+        # cycle 14 → middle = day 7 after anchor Apr 1 = Apr 8.
+        row = _row(notify_arrival=False, notify_cheap_day=False)
+        with patch("services.notifier.fetch_notify_candidates", new=AsyncMock(return_value=[row])), \
+             patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
+             patch("services.notifier.mark_sent", new=AsyncMock()) as mark_sent_mock:
+            bot = AsyncMock()
+            when = datetime.combine(date(2026, 4, 8), NOTIFY_AT)
+            asyncio.run(run_for_minute(bot, when))
+            bot.send_message.assert_called_once()
+            _tg_id, text = bot.send_message.call_args[0]
+            assert "⚖️ Сегодня середина цикла" in text
+            mark_sent_mock.assert_called_once_with(1, [(1, "middle")], date(2026, 4, 8))
+
+    def test_middle_off_by_default_not_fired(self) -> None:
+        row = _row(notify_arrival=False, notify_cheap_day=False, notify_middle=False)
+        with patch("services.notifier.fetch_notify_candidates", new=AsyncMock(return_value=[row])), \
+             patch("services.notifier.already_sent", new=AsyncMock(return_value=set())), \
+             patch("services.notifier.mark_sent", new=AsyncMock()):
+            bot = AsyncMock()
+            when = datetime.combine(date(2026, 4, 8), NOTIFY_AT)
+            asyncio.run(run_for_minute(bot, when))
+            bot.send_message.assert_not_called()
+
     def test_no_cycle_shop_produces_no_trigger(self) -> None:
         row = _row(cycle_length=None, anchor_date=None)
         with patch("services.notifier.fetch_notify_candidates", new=AsyncMock(return_value=[row])), \
@@ -160,4 +191,5 @@ class TestRunForMinute:
 def test_lead_day_constants_match_spec() -> None:
     assert ARRIVAL_LEAD_DAYS == 0
     assert CHEAP_DAY_LEAD_DAYS == 1
+    assert MIDDLE_LEAD_DAYS == 0
     assert NOTIFY_AT == time(9, 0)

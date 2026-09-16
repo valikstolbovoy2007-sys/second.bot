@@ -9,6 +9,7 @@ from data.repos.users import (
     set_pause_until,
     toggle_notify_arrival,
     toggle_notify_cheap_day,
+    toggle_notify_middle,
     upsert_user,
 )
 from keyboards.settings_kb import (
@@ -55,7 +56,7 @@ async def _render_notify_menu(call: CallbackQuery) -> None:
     new_id = await render(
         call.bot, call.message.chat.id, call.message.message_id,
         await t("settings.notify_title"),
-        notify_settings_kb(s.notify_arrival, s.notify_cheap_day),
+        notify_settings_kb(s.notify_arrival, s.notify_cheap_day, s.notify_middle),
     )
     ws.set_active(call.from_user.id, new_id)
     await call.answer()
@@ -88,6 +89,14 @@ async def cb_toggle_arrival(call: CallbackQuery, callback_data: SettingsCb) -> N
 async def cb_toggle_cheap(call: CallbackQuery, callback_data: SettingsCb) -> None:
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     new_value = await toggle_notify_cheap_day(user_id)
+    await call.answer(await t("settings.toggle_on" if new_value else "settings.toggle_off"))
+    await _render_notify_menu(call)
+
+
+@router.callback_query(SettingsCb.filter(F.action == "toggle_middle"))
+async def cb_toggle_middle(call: CallbackQuery, callback_data: SettingsCb) -> None:
+    user_id = await upsert_user(call.from_user.id, call.from_user.username)
+    new_value = await toggle_notify_middle(user_id)
     await call.answer(await t("settings.toggle_on" if new_value else "settings.toggle_off"))
     await _render_notify_menu(call)
 

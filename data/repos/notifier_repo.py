@@ -6,10 +6,9 @@ from data.db import pool
 
 async def fetch_notify_candidates(today: date) -> list[dict]:
     """One row per (user, shop) subscription for a user who has at least
-    one of the two global notification switches on, joined with the shop's
-    cycle fields and the user's tg_id. Arrival fires 1 day before, at
-    9:00; cheap-day fires the same day, at 9:00 — both fixed (see
-    services.notifier.run_for_minute).
+    one of the three global notification switches on, joined with the shop's
+    cycle fields and the user's tg_id. All events fire at a fixed 9:00
+    (see services.notifier.run_for_minute).
     """
     async with pool().acquire() as conn:
         rows = await conn.fetch(
@@ -18,14 +17,14 @@ async def fetch_notify_candidates(today: date) -> list[dict]:
                    s.id AS shop_id, s.name, s.address,
                    s.cycle_length, s.anchor_date,
                    s.monthly_weekday, s.monthly_occurrence,
-                   u.notify_arrival, u.notify_cheap_day
+                   u.notify_arrival, u.notify_cheap_day, u.notify_middle
             FROM subscriptions sub
             JOIN shops s ON s.id = sub.shop_id
             JOIN users u ON u.id = sub.user_id
             WHERE s.is_active = true
               AND u.is_blocked = false
               AND (u.pause_until IS NULL OR u.pause_until <= $1)
-              AND (u.notify_arrival OR u.notify_cheap_day)
+              AND (u.notify_arrival OR u.notify_cheap_day OR u.notify_middle)
             """,
             today,
         )

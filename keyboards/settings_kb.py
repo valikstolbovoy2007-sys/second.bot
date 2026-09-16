@@ -7,7 +7,7 @@ PAUSE_OPTIONS: list[int] = [1, 3, 7, 14]
 
 
 class SettingsCb(CallbackData, prefix="set"):
-    action: str  # "open" | "notif" | "pause" | "toggle_arrival" | "toggle_cheap"
+    action: str  # "open" | "notif" | "pause" | "toggle_arrival" | "toggle_cheap" | "toggle_middle"
 
 
 class PauseCb(CallbackData, prefix="spz"):
@@ -35,7 +35,7 @@ def settings_menu_kb(pause_until: date | None) -> InlineKeyboardMarkup:
     ])
 
 
-def notify_settings_kb(notify_arrival: bool, notify_cheap_day: bool) -> InlineKeyboardMarkup:
+def notify_settings_kb(notify_arrival: bool, notify_cheap_day: bool, notify_middle: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"{_mark(notify_arrival)} 🚚 Уведомлять о завозе (в день завоза, 9:00)",
@@ -44,6 +44,10 @@ def notify_settings_kb(notify_arrival: bool, notify_cheap_day: bool) -> InlineKe
         [InlineKeyboardButton(
             text=f"{_mark(notify_cheap_day)} 💰 Уведомлять о дешёвом дне (за 2 дня, 9:00)",
             callback_data=SettingsCb(action="toggle_cheap").pack(),
+        )],
+        [InlineKeyboardButton(
+            text=f"{_mark(notify_middle)} ⚖️ Уведомлять о середине цикла (9:00)",
+            callback_data=SettingsCb(action="toggle_middle").pack(),
         )],
         [InlineKeyboardButton(text="◀️ Назад", callback_data=SettingsCb(action="open").pack())],
     ])

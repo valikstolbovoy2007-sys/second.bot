@@ -21,9 +21,10 @@ log = logging.getLogger(__name__)
 NOTIFY_AT = time(9, 0)
 # День дешёвой цены — это день перед завозом. Чтобы уведомления не падали в
 # один день: о дешёвом дне пишем за день до него (за 2 дня до завоза),
-# о завозе — в день завоза.
+# о завозе — в день завоза, о середине цикла — в сам день середины.
 ARRIVAL_LEAD_DAYS = 0
 CHEAP_DAY_LEAD_DAYS = 1
+MIDDLE_LEAD_DAYS = 0
 
 _RU_WEEKDAYS = [
     "Понедельник", "Вторник", "Среда", "Четверг",
@@ -68,6 +69,8 @@ def format_shop_message(trigger: Trigger) -> str:
             line = f"💰 Завтра самый дешёвый день (завоз в {trigger.arrival_weekday})"
         else:
             line = "💰 Завтра самый дешёвый день"
+    elif trigger.event_type == "middle":
+        line = "⚖️ Сегодня середина цикла — скидка средняя, цена не дорогая и не дешёвая"
     else:
         line = "🚚 Завтра день завоза — самая дорогая цена"
     lines = [
@@ -116,6 +119,11 @@ async def run_for_minute(bot: Bot, when: datetime) -> None:
                 shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
                 event_type="cheap_day", lead_days=CHEAP_DAY_LEAD_DAYS,
                 arrival_weekday=_RU_WEEKDAYS[arrival_date.weekday()],
+            ))
+        if row["notify_middle"] and days_until(today, info, EventType.MIDDLE) == MIDDLE_LEAD_DAYS:
+            by_user.setdefault(user_id, []).append(Trigger(
+                shop_id=int(row["shop_id"]), shop_name=row["name"], address=row["address"],
+                event_type="middle", lead_days=MIDDLE_LEAD_DAYS,
             ))
 
     for user_id, triggers in by_user.items():

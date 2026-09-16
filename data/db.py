@@ -16,10 +16,12 @@ CREATE TABLE IF NOT EXISTS users (
     username    TEXT,
     pause_until DATE,
     is_blocked  BOOLEAN NOT NULL DEFAULT false,
-    -- Global switches: arrival warning fires 1 day before at 9:00, cheap-day
-    -- warning fires same-day at 9:00 — see services.notifier.
+    -- Global switches: arrival warning fires on the arrival day at 9:00,
+    -- cheap-day warning the day before the discount day, middle-of-cycle
+    -- warning on the middle day — see services.notifier.
     notify_arrival   BOOLEAN NOT NULL DEFAULT true,
     notify_cheap_day BOOLEAN NOT NULL DEFAULT true,
+    notify_middle    BOOLEAN NOT NULL DEFAULT false,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -254,6 +256,7 @@ DROP TABLE IF EXISTS notification_weekdays;
 -- Replaces the old single `notify_time` picker (no longer used).
 ALTER TABLE users           ADD COLUMN IF NOT EXISTS notify_arrival BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE users           ADD COLUMN IF NOT EXISTS notify_cheap_day BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE users           ADD COLUMN IF NOT EXISTS notify_middle BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE users           DROP COLUMN IF EXISTS notify_time;
 -- photo_file_id отжил: ровно одна колонка-фото в shops дублировала
 -- многострочную таблицу shop_photos. Переносим оставшиеся значения и

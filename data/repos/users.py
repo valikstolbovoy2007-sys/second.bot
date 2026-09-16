@@ -11,6 +11,7 @@ class UserSettings:
     pause_until: date | None
     notify_arrival: bool
     notify_cheap_day: bool
+    notify_middle: bool
 
 
 async def upsert_user(tg_id: int, username: str | None) -> int:
@@ -47,7 +48,7 @@ async def is_admin(tg_id: int) -> bool:
 async def get_settings(user_id: int) -> UserSettings | None:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, tg_id, pause_until, notify_arrival, notify_cheap_day "
+            "SELECT id, tg_id, pause_until, notify_arrival, notify_cheap_day, notify_middle "
             "FROM users WHERE id = $1",
             user_id,
         )
@@ -59,6 +60,7 @@ async def get_settings(user_id: int) -> UserSettings | None:
         pause_until=row["pause_until"],
         notify_arrival=row["notify_arrival"],
         notify_cheap_day=row["notify_cheap_day"],
+        notify_middle=row["notify_middle"],
     )
 
 
@@ -87,3 +89,13 @@ async def toggle_notify_cheap_day(user_id: int) -> bool:
             user_id,
         )
     return bool(row["notify_cheap_day"])
+
+
+async def toggle_notify_middle(user_id: int) -> bool:
+    async with pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE users SET notify_middle = NOT notify_middle WHERE id = $1 "
+            "RETURNING notify_middle",
+            user_id,
+        )
+    return bool(row["notify_middle"])
