@@ -36,6 +36,7 @@ DEFAULTS: dict[str, str] = {
     "menu.btn.settings": "⚙️ Настройки",
     "menu.btn.help":     "❓ Помощь",
     "menu.btn.admin":    "🛠 Админка",
+    "menu.btn.donate":   "🎁 Пожертвования на хостинг",
 
     # start / help
     "start.welcome": (
@@ -50,6 +51,14 @@ DEFAULTS: dict[str, str] = {
         "⚙️ <b>Настройки</b> — расписание уведомлений</blockquote>\n"
         "\n"
         "Выбирай раздел 👇"
+    ),
+    "donate.text": (
+        "🎁 <b>Поддержать проект</b>\n"
+        "\n"
+        "Это инновационный амбициозный проект без внешнего финансирования — "
+        "расходы на содержание бота надо как-то оплачивать. Если хочешь помочь, "
+        "можешь <a href=\"https://www.tbank.ru/rm/r_eukDUdwhhw.HnoEgHeBUP/9Guad58244\">поддержать нас донатом</a>. "
+        "Спасибо! 💛"
     ),
     "help.text": (
         "ℹ️ <b>Как пользоваться ботом</b>\n"
@@ -192,9 +201,11 @@ DESCRIPTIONS: dict[str, str] = {
     "menu.btn.settings": "Кнопка «Настройки» в главном меню",
     "menu.btn.help":     "Кнопка «Помощь» в главном меню",
     "menu.btn.admin":    "Кнопка «Админка» в главном меню (видят только админы)",
+    "menu.btn.donate":   "Кнопка «Пожертвования на хостинг» в главном меню",
 
     "start.welcome": "Текст приветствия по команде /start и кнопке «В меню»",
     "help.text":     "Текст справки по команде /help и кнопке «❓ Помощь»",
+    "donate.text":   "Текст экрана «Пожертвования на хостинг» (ссылка на донат)",
 
     "catalog.title":          "Заголовок экрана каталога",
     "catalog.found":          "Подпись «Найдено: N» под заголовком каталога",
@@ -239,10 +250,10 @@ DESCRIPTIONS: dict[str, str] = {
 GROUPS: list[tuple[str, str, list[str]]] = [
     ("menu",    "Главное меню", [
         "menu.btn.catalog", "menu.btn.my_shops", "menu.btn.settings",
-        "menu.btn.help", "menu.btn.admin",
+        "menu.btn.help", "menu.btn.admin", "menu.btn.donate",
     ]),
     ("start",   "Старт и помощь", [
-        "start.welcome", "help.text",
+        "start.welcome", "help.text", "donate.text",
     ]),
     ("catalog", "Каталог", [
         "catalog.title", "catalog.found", "catalog.hint", "catalog.legend",

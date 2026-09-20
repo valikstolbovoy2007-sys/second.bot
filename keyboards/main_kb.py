@@ -9,6 +9,7 @@ async def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=await t("menu.btn.my_shops"), callback_data="my_shops:open")],
         [InlineKeyboardButton(text=await t("menu.btn.settings"), callback_data="settings:open")],
         #[InlineKeyboardButton(text=await t("menu.btn.help"),     callback_data="help:open")],
+        [InlineKeyboardButton(text=await t("menu.btn.donate"),   callback_data="donate:open")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(text=await t("menu.btn.admin"), callback_data="admin:open")])

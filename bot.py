@@ -13,6 +13,7 @@ from data.db import close_db, init_db
 from handlers import (
     admin,
     catalog,
+    donate,
     errors,
     feedback,
     my_shops,
@@ -65,6 +66,7 @@ async def main() -> None:
     dp.include_router(catalog.router)
     dp.include_router(my_shops.router)
     dp.include_router(settings_handlers.router)
+    dp.include_router(donate.router)
     dp.include_router(errors.unhandled_router)
 
     scheduler = await start_scheduler(bot)
