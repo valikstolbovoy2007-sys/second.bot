@@ -30,7 +30,7 @@ async def _all_users_with_shops() -> list[dict]:
             """
             SELECT u.username,
                    u.created_at,
-                   COALESCE(array_agg(s.name ORDER BY s.name), '{}') AS shops
+                   COALESCE(array_agg(s.name ORDER BY s.name) FILTER (WHERE s.name IS NOT NULL), '{}') AS shops
             FROM users u
             LEFT JOIN subscriptions sub ON sub.user_id = u.id
             LEFT JOIN shops s ON s.id = sub.shop_id
@@ -45,7 +45,7 @@ def _user_line(u: dict) -> str:
     name = u["username"]
     label = f"@{html.escape(name)}" if name else "<i>(без username)</i>"
     created = u["created_at"].strftime("%d.%m.%Y") if u["created_at"] else "?"
-    shops = u.get("shops") or []
+    shops = [s for s in (u.get("shops") or []) if s]
     if shops:
         shops_txt = ", ".join(html.escape(s) for s in shops)
         return f"• {label} <i>({created})</i> — {shops_txt}"
