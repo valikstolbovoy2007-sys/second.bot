@@ -17,6 +17,7 @@ router.callback_query.filter(IsSuperAdmin())
 def _kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Админы и магазины", callback_data="sa:admins:list:0")],
+        [InlineKeyboardButton(text="👥 Все пользователи", callback_data="sa:users:list")],
         [InlineKeyboardButton(text="📣 Рассылки", callback_data="adm:bc:menu")],
         [InlineKeyboardButton(text="🎨 Шаблон карточки", callback_data="sa:tpl:view")],
         [InlineKeyboardButton(text="📝 Тексты бота", callback_data="sa:texts")],

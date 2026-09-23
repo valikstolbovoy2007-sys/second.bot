@@ -12,10 +12,12 @@ from handlers.superadmin import (
     panel,
     template,
     texts,
+    users_list,
 )
 
 router = Router(name="superadmin")
 router.include_router(panel.router)
+router.include_router(users_list.router)
 router.include_router(admins.router)
 router.include_router(audit_view.router)
 router.include_router(chains.router)
