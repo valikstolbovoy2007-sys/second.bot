@@ -141,6 +141,28 @@ class TestRender:
         assert new_id2 == new_id
         assert [c[0] for c in bot2.calls] == ["edit"]
 
+    def test_user_message_below_menu_teleports(self) -> None:
+        """Юзер написал что-то под меню (middleware записал id) → меню переезжает вниз."""
+        bot = _Bot()
+        journal = ChatJournal()
+        journal.record(555, 100)  # входящее сообщение пользователя (id больше 42)
+        with _patch("services.chat_render", journal):
+            new_id = asyncio.run(render(bot, 555, 42, "Меню", None))
+        assert new_id > 100
+        kinds = [c[0] for c in bot.calls]
+        assert "delete" in kinds and "send" in kinds
+
+    def test_removed_user_message_does_not_teleport(self) -> None:
+        """После удаления ввода (поиск/фидбек) призрака в журнале быть не должно."""
+        bot = _Bot()
+        journal = ChatJournal()
+        journal.record(555, 100)  # ввод юзера
+        journal.remove(555, 100)  # хендлер удалил ввод
+        with _patch("services.chat_render", journal):
+            new_id = asyncio.run(render(bot, 555, 42, "Меню", None))
+        assert new_id == 42  # обычный edit, БЕЗ телепорта
+        assert [c[0] for c in bot.calls] == ["edit"]
+
     def test_not_modified_is_ok_in_place(self) -> None:
         bot = _Bot()
         bot.edit_error = TelegramBadRequest("x", NOT_MODIFIED)

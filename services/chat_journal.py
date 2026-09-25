@@ -35,5 +35,13 @@ class ChatJournal:
                 return
             self._edges[chat_id] = [mid for mid in ids if mid > message_id]
 
+    def remove(self, chat_id: int, message_id: int) -> None:
+        """Forget an id whose message got deleted (prevents phantom teleports)."""
+        with self._lock:
+            ids = self._edges.get(chat_id)
+            if not ids:
+                return
+            self._edges[chat_id] = [mid for mid in ids if mid != message_id]
+
 
 journal = ChatJournal()

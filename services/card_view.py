@@ -79,6 +79,7 @@ async def send_shop_card(
         sent = await bot.send_photo(chat_id, photo_id, caption=body, reply_markup=kb)
     else:
         sent = await bot.send_message(chat_id, body, reply_markup=kb, disable_web_page_preview=True)
+    journal.record(chat_id, sent.message_id)
     return sent.message_id
 
 

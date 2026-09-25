@@ -33,6 +33,7 @@ from keyboards.catalog_kb import (
 )
 from services.card_render import format_price_schedule, phase_marker
 from services.card_view import show_shop_card, show_text_view
+from services.chat_journal import journal
 from services.chat_render import render
 from services.maps import yandex_maps_url
 from services.workspace import ws
@@ -221,6 +222,7 @@ async def _delete_messages(bot, chat_id: int, msg_ids: list[int | None]) -> None
             await bot.delete_message(chat_id, msg_id)
         except TelegramBadRequest:
             pass
+        journal.remove(chat_id, msg_id)
 
 
 async def _ask_location(
@@ -436,6 +438,7 @@ async def _render_search_result(
         await message.delete()
     except TelegramBadRequest:
         pass
+    journal.remove(message.chat.id, message.message_id)
     if sort == SORT_NEARBY:
         point = _point_for(message.from_user.id)
     else:

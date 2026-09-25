@@ -21,6 +21,7 @@ from handlers import (
     start,
 )
 from handlers import superadmin
+from middlewares.journal import JournalMiddleware
 from middlewares.maintenance import MaintenanceMiddleware
 from middlewares.throttling import ThrottlingMiddleware
 from services.broadcasts import start_dispatcher, stop_dispatcher
@@ -56,6 +57,7 @@ async def main() -> None:
     )
     dp = Dispatcher()
     dp.message.middleware(MaintenanceMiddleware())
+    dp.message.middleware(JournalMiddleware())
     dp.callback_query.middleware(MaintenanceMiddleware())
     dp.callback_query.middleware(ThrottlingMiddleware(rate=0.5))
     dp.include_router(errors.router)

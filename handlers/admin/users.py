@@ -18,6 +18,7 @@ from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
+from services.chat_journal import journal
 from states.admin_states import AdminDmStates
 
 log = logging.getLogger(__name__)
@@ -255,14 +256,15 @@ async def msg_dm_send(message: Message, state: FSMContext, bot: Bot) -> None:
         "<i>Ответить можно через /feedback.</i>"
     )
     try:
-        await bot.send_message(target, body)
-    except Exception as e:
+        sent = await bot.send_message(target, body)
+    except Exception as e:  # pragma: no cover
         log.exception("admin DM failed")
         await render_screen_msg(
             message, state, f"❌ Не доставлено: {html.escape(str(e))}", _back_kb(),
         )
         await state.clear()
         return
+    journal.record(target, sent.message_id)
     async with pool().acquire() as conn:
         await conn.execute(
             "INSERT INTO admin_messages (from_tg_id, to_tg_id, text) VALUES ($1,$2,$3)",

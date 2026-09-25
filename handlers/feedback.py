@@ -22,6 +22,7 @@ from keyboards.catalog_kb import CatalogCb, shop_card_kb
 from keyboards.main_kb import main_menu
 from services.catalog import FLT_ALL, SORT_NAME
 from services.card_view import send_shop_card, show_shop_card, show_text_view
+from services.chat_journal import journal
 from services.chat_render import render, render_focus
 from services.maps import yandex_maps_url
 from services.texts import t
@@ -333,6 +334,7 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.delete()
     except TelegramBadRequest:
         pass
+    journal.remove(message.chat.id, message.message_id)
 
     if data.get("report_msg_id") is not None:
         # Флоу «Исправить неточность»: прашивание превращается в превью.
