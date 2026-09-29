@@ -116,9 +116,14 @@ def _fmt_price(p: int) -> str:
 
 
 def format_price_schedule(shop: Shop, today: date) -> str:
-    """Day-by-day price drops from today until next arrival."""
+    """Day-by-day price drops from today until next arrival.
+
+    For shops with a custom discount schedule (shops.discount_schedule),
+    renders the per-day labels instead of ₽ prices — see services.discount.
+    """
     import html as _html
     from services.cycle import day_in_cycle, days_until
+    from services.discount import label_for_day
 
     header = (
         f"📋 <b>Расписание цен</b>\n"
@@ -126,11 +131,13 @@ def format_price_schedule(shop: Shop, today: date) -> str:
         f"{_SEP}"
     )
     if not shop.price_start or shop.price_step is None:
-        return (
-            f"{header}\n\n"
-            "💭 Цены пока не уточнили — но магазин работает.\n"
-            "Загляни в карточку, чтобы посмотреть адрес и расписание завозов."
-        )
+        # У магазина может не быть ₽-формулы, но быть кастомный график скидок.
+        if not shop.discount_schedule:
+            return (
+                f"{header}\n\n"
+                "💭 Цены пока не уточнили — но магазин работает.\n"
+                "Загляни в карточку, чтобы посмотреть адрес и расписание завозов."
+            )
     info = resolve_cycle_info(shop.cycle_length, shop.anchor_date, shop.monthly_weekday, today, monthly_occurrence=shop.monthly_occurrence)
     if info is None:
         return (
@@ -143,13 +150,22 @@ def format_price_schedule(shop: Shop, today: date) -> str:
     days_to_next = days_until(today, info, EventType.ARRIVAL)
     show_days = info.cycle_length if days_to_next == 0 else days_to_next
 
-    lines = [
-        "📋 <b>Расписание цен</b>",
-        f"🏪 <b>{_html.escape(shop.name)}</b>",
-        _SEP,
-        f"🗓 Цикл: {info.cycle_length} дн. · шаг {_fmt_price(shop.price_step)} ₽/день",
-        _SEP,
-    ]
+    if shop.discount_schedule:
+        lines = [
+            "📋 <b>Расписание скидок</b>",
+            f"🏪 <b>{_html.escape(shop.name)}</b>",
+            _SEP,
+            f"🗓 Цикл: {info.cycle_length} дн.",
+            _SEP,
+        ]
+    else:
+        lines = [
+            "📋 <b>Расписание цен</b>",
+            f"🏪 <b>{_html.escape(shop.name)}</b>",
+            _SEP,
+            f"🗓 Цикл: {info.cycle_length} дн. · шаг {_fmt_price(shop.price_step)} ₽/день",
+            _SEP,
+        ]
 
     for i in range(show_days + 1):
         d = today + timedelta(days=i)
@@ -159,6 +175,17 @@ def format_price_schedule(shop: Shop, today: date) -> str:
         date_str = f"{wd}, {d.day} {mon}"
         is_today = i == 0
         is_arrival = cycle_day == 0
+
+        if shop.discount_schedule:
+            label = label_for_day(shop, cycle_day) or "без скидки"
+            if is_arrival:
+                tag = " · сегодня" if is_today else ""
+                lines.append(f"<b>🚚 {date_str}  —  {label}  завоз{tag}</b>")
+            elif is_today:
+                lines.append(f"<b>  ▶ {date_str}  —  {label}  · сегодня</b>")
+            else:
+                lines.append(f"      {date_str}  —  {label}")
+            continue
 
         if is_arrival:
             tag = " · сегодня" if is_today else ""

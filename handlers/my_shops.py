@@ -5,7 +5,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 
-from data.repos.shops import Shop, get_shop
+from data.repos.shops import Shop, get_shop, shop_has_price_schedule
 from data.repos.subs import (
     count_subscriptions,
     is_subscribed,
@@ -89,7 +89,7 @@ async def cb_shop(call: CallbackQuery, callback_data: MyShopsCb) -> None:
         await call.answer(await t("system.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     kb = shop_card_kb(
         shop.id, tracked, src="my", page=callback_data.page,
         has_prices=has_prices,
@@ -148,7 +148,7 @@ async def cb_toggle(call: CallbackQuery, callback_data: TrackCb) -> None:
         msg = await t("myshops.added")
         new_tracked = True
 
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     kb = shop_card_kb(
         shop.id, new_tracked,
         src=callback_data.src,

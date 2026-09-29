@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS shops (
     -- Свободный текст: «Пн-Сб 10:00–21:00, Вс выходной» и т.п.
     -- Не парсим в дни/часы — слишком разнообразные форматы у секондов.
     working_hours TEXT,
+    -- Кастомный график скидок: одна строка = метка дня цикла N
+    -- (0 = день завоза). Заменяет формулу цены: показываем метку дня,
+    -- а не ₽/кг. NULL — обычный режим с price_start/price_step.
+    discount_schedule TEXT,
     -- Координаты для фильтра «По расстоянию». Заполняются из ссылки
     -- Яндекс.Карт (см. services.maps.resolve_shop_coords). NULL — магазин
     -- не участвует в distance-фильтре.
@@ -239,6 +243,8 @@ ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_weekday SMALLINT;
 -- когда monthly_weekday не NULL — см. services.cycle.resolve_cycle_info.
 ALTER TABLE shops           DROP COLUMN IF EXISTS monthly_last;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS monthly_occurrence SMALLINT NOT NULL DEFAULT 1;
+-- Кастомный график скидок (одна строка = метка дня цикла, 0 = день завоза).
+ALTER TABLE shops           ADD COLUMN IF NOT EXISTS discount_schedule TEXT;
 -- Per-shop notification settings (toggle flags, weekday reminders, and the
 -- short-lived lead-days/custom-time wizard) were all replaced by a single
 -- global per-user toggle — see notify_arrival/notify_cheap_day on `users`.

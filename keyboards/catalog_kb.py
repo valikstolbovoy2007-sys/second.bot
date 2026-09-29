@@ -77,7 +77,7 @@ def _shop_button_label(
     shop: Shop, phase_marker: str = "", tracked: bool = False,
     distance_km: float | None = None,
 ) -> str:
-    markers = "".join(m for m in (("" if shop.price_start else "🎩"), phase_marker) if m)
+    markers = "".join(m for m in (("" if (shop.price_start or shop.discount_schedule) else "🎩"), phase_marker) if m)
     prefix = ""
     if distance_km is not None:
         prefix += f"{_format_km(distance_km)} км · "

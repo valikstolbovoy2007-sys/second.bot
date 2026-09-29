@@ -16,7 +16,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from data.repos.shops import Shop, get_shop, list_active_shops
+from data.repos.shops import Shop, get_shop, list_active_shops, shop_has_price_schedule
 from data.repos.subs import is_subscribed, subscribed_shop_ids
 from data.repos.users import upsert_user
 from keyboards.catalog_kb import (
@@ -295,7 +295,7 @@ async def cb_shop(call: CallbackQuery, callback_data: CatalogCb) -> None:
         await call.answer(await t("catalog.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     kb = shop_card_kb(
         shop.id, tracked, src=callback_data.src,
         page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
@@ -317,7 +317,7 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
         await call.answer(await t("catalog.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     new_id = await show_text_view(
         call,
         format_price_schedule(shop, date.today()),

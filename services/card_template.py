@@ -28,6 +28,7 @@ from services.cycle import (
     next_event_date,
     resolve_cycle_info,
 )
+from services.discount import label_for_day
 
 CONFIG_KEY = "shop_card_template"
 
@@ -141,7 +142,14 @@ def build_context(shop: Shop, today: date, *, is_tracked: bool = False) -> dict[
         d = day_in_cycle(today, info)
         ctx["day_in_cycle"] = str(d + 1)
 
-        if shop.price_start and shop.price_step is not None:
+        day_label_text = label_for_day(shop, d)
+        if day_label_text:
+            # Кастомный график полностью заменяет ₽-формулу: показываем метку дня.
+            emoji = price_phase_emoji(d, info.cycle_length)
+            ctx["price_emoji"] = emoji
+            ctx["price_today_line"] = f"{emoji} Сегодня\n<b>{day_label_text}</b>"
+            ctx["day_label"] = f"<b>{d + 1}-й день</b>"
+        elif shop.price_start and shop.price_step is not None:
             price = max(0, shop.price_start - max(0, d) * shop.price_step)
             emoji = price_phase_emoji(d, info.cycle_length)
             ctx["price_today"] = _fmt_price(price)

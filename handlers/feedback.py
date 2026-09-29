@@ -15,7 +15,7 @@ from aiogram.types import (
 
 from config import settings
 from data.repos.feedback_repo import save_feedback
-from data.repos.shops import get_shop
+from data.repos.shops import get_shop, shop_has_price_schedule
 from data.repos.subs import is_subscribed, list_subscribed
 from data.repos.users import is_admin, upsert_user
 from keyboards.catalog_kb import CatalogCb, shop_card_kb
@@ -207,7 +207,7 @@ async def _redraw_shop_card(call: CallbackQuery, user_id: int, data: dict) -> No
     if not shop:
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     kb = shop_card_kb(
         shop.id, tracked,
         src=data.get("src", "cat"),
@@ -231,7 +231,7 @@ async def _restore_card_fresh(message: Message, data: dict) -> None:
         return
     user_id = await upsert_user(message.from_user.id, message.from_user.username)
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = bool(shop.price_start and shop.price_step is not None)
+    has_prices = shop_has_price_schedule(shop)
     kb = shop_card_kb(
         shop.id, tracked,
         src=data.get("src", "cat"),

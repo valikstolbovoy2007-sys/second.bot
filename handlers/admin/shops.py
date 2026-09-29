@@ -55,6 +55,10 @@ FIELDS = {
     # координаты для distance-фильтра (см. services.maps) — процесс асинхронный,
     # поэтому финальное сообщение показывает результат через resolve_shop_coords.
     "maps_url": ("Ссылка Яндекс.Карт (https://yandex.ru/maps/-/...) — «-» очистить", 300),
+    # Кастомный график скидок: одна строка = метка дня цикла N (0 = день
+    # завоза), столько строк, сколько дней в цикле. Например: «Новый завоз»,
+    # «70% скидка», «добавление товара», «без скидки». «-» — очистить.
+    "schedule": ("График скидок (по строке на день цикла, с дня завоза) — «-» очистить", 2000),
 }
 
 
@@ -171,6 +175,7 @@ def _card_kb(shop_id: int, page: int, is_active: bool, is_super: bool) -> Inline
         [edit_btn("✏️ Описание", "description")],
         [edit_btn("✏️ Цикл", "cycle"), edit_btn("✏️ Anchor", "anchor")],
         [edit_btn("💰 Цена/кг", "price_start"), edit_btn("📉 Шаг ₽/день", "price_step")],
+        [edit_btn("📅 График скидок", "schedule")],
         [edit_btn("🗺 Ссылка Карт", "maps_url")],
         [
             InlineKeyboardButton(
@@ -226,6 +231,10 @@ def _format_card(shop, subs: int) -> str:
         price_line = f"💰 {shop.price_start} ₽/кг в день завоза · шаг {shop.price_step} ₽/день"
     elif shop.price_start:
         price_line = f"💰 {shop.price_start} ₽/кг (шаг не задан)"
+    sched_line = "📅 График скидок: —"
+    if shop.discount_schedule:
+        n = len(shop.discount_schedule.splitlines())
+        sched_line = f"📅 График скидок: задан ({n} дн.)"
     return (
         f"🛍 <b>{chain}{html.escape(shop.name)}</b>  (id={shop.id})\n"
         f"{flag}\n"
@@ -233,6 +242,7 @@ def _format_card(shop, subs: int) -> str:
         f"🕒 Время работы: {hours}\n"
         f"🗓 Цикл: {cycle_anchor}\n"
         f"{price_line}\n"
+        f"{sched_line}\n"
         f"👀 Подписчиков: {subs}\n"
         f"─────────────────────\n"
         f"{desc}"
@@ -511,6 +521,22 @@ async def msg_edit_value(message: Message, state: FSMContext) -> None:
     elif field == "maps_url":
         # «-» / «—» / пусто — очистить ссылку (и координаты).
         value = None if raw in ("", "-", "—") else raw
+    elif field == "schedule":
+        # «-» / «—» / пусто — очистить график.
+        if raw in ("", "-", "—"):
+            value = None
+        else:
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            prev = await get_shop(shop_id)
+            shop_cycle = prev.cycle_length if prev else None
+            # Число строк должно совпадать с длиной цикла (когда она известна).
+            if shop_cycle and len(lines) != shop_cycle:
+                await err(
+                    f"⚠️ В графике {len(lines)} строк, а нужно {shop_cycle} "
+                    f"(по одной на день цикла, начиная с дня завоза)."
+                )
+                return
+            value = "\n".join(lines)
 
     shop_before = await get_shop(shop_id)
     ok = await update_shop_field(shop_id, db_field, value)

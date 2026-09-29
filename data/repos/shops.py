@@ -24,6 +24,9 @@ class Shop:
     # Координаты для фильтра «По расстоянию» (см. services.maps).
     lat: float | None = None
     lng: float | None = None
+    # Кастомный график скидок: одна строка = метка дня цикла N
+    # (0 = день завоза). Заменяет формулу цены ₽/кг.
+    discount_schedule: str | None = None
 
 
 def _row_to_shop(row) -> Shop:
@@ -44,7 +47,13 @@ def _row_to_shop(row) -> Shop:
         monthly_occurrence=row["monthly_occurrence"],
         lat=row["lat"],
         lng=row["lng"],
+        discount_schedule=row.get("discount_schedule"),
     )
+
+
+def shop_has_price_schedule(shop: Shop) -> bool:
+    """Есть что показать в «Расписании цен»: обычная ₽-формула или кастомный график."""
+    return bool(shop.discount_schedule) or bool(shop.price_start and shop.price_step is not None)
 
 
 def _filter_clause(flt: str) -> str:
@@ -212,7 +221,8 @@ async def update_shop_field(shop_id: int, field: str, value) -> bool:
     allowed = {"name", "address", "description", "chain_name",
                "cycle_length", "anchor_date", "is_active",
                "price_start", "price_step", "working_hours", "maps_url",
-               "monthly_weekday", "monthly_occurrence", "lat", "lng"}
+               "monthly_weekday", "monthly_occurrence", "lat", "lng",
+               "discount_schedule"}
     if field not in allowed:
         raise ValueError(f"field {field} not editable")
     async with pool().acquire() as conn:
