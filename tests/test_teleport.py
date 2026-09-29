@@ -113,6 +113,50 @@ def _patch(module_name: str, journal: ChatJournal):
     return patch(f"{module_name}.journal", journal)
 
 
+class TestJournalPersistenceAPI:
+    def test_load_restores_edges(self) -> None:
+        j = ChatJournal()
+        j.load(555, [42, 100])
+        assert j.has_newer(555, 42)
+        assert not j.has_newer(555, 100)
+
+    def test_load_clears_chat_when_empty(self) -> None:
+        j = ChatJournal()
+        j.record(555, 42)
+        j.load(555, [])
+        assert not j.has_newer(555, 0)
+
+    def test_load_trims_to_max(self) -> None:
+        j = ChatJournal()
+        ids = list(range(1, 200))
+        j.load(555, ids)
+        assert j.has_newer(555, 198)  # хвост (самые свежие) сохранён
+        assert not j.has_newer(555, 199)
+
+    def test_record_marks_dirty(self) -> None:
+        j = ChatJournal()
+        assert j.dirty_snapshot() == {}
+        j.record(555, 42)
+        assert j.dirty_snapshot() == {555: [42]}
+        assert j.dirty_snapshot() == {}  # флаги сброшены
+
+    def test_remove_marks_dirty_with_empty_list(self) -> None:
+        j = ChatJournal()
+        j.record(555, 42)
+        j.remove(555, 42)
+        # пустой список означает «удалить строки чата из БД» (без призраков)
+        assert j.dirty_snapshot() == {555: []}
+
+    def test_drop_below_marks_dirty_only_on_change(self) -> None:
+        j = ChatJournal()
+        j.record(555, 100)
+        j.dirty_snapshot()  # очистить флаги
+        j.drop_below(555, 42)  # 100 остаётся (он ниже старого меню) — без изменения
+        assert j.dirty_snapshot() == {}
+        j.drop_below(555, 100)  # старый конец отброшен — чат опустел
+        assert j.dirty_snapshot() == {555: []}
+
+
 class TestRender:
     def test_clean_journal_edits_in_place(self) -> None:
         """Без сообщений под меню — превращение на месте, БЕЗ удаления."""

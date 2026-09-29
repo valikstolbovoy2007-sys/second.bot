@@ -20,6 +20,7 @@ from keyboards.catalog_kb import TrackCb, shop_card_kb
 from keyboards.my_shops_kb import PAGE_SIZE, MyShopsCb, confirm_unsub_all_kb, my_shops_kb
 from services.card_render import today_marker
 from services.card_view import show_shop_card, show_text_view
+from services.chat_journal import journal
 from services.maps import yandex_maps_url
 from services.texts import t
 from services.workspace import ws
@@ -59,6 +60,7 @@ async def _close_card_back_to_list(
     ws.close_card(user_id)
     body, kb = await _myshops_payload(user_id, page=page)
     sent = await call.bot.send_message(call.message.chat.id, body, reply_markup=kb)
+    journal.record(call.message.chat.id, sent.message_id)
     ws.set_active(user_id, sent.message_id)
     try:
         await call.message.delete()

@@ -211,6 +211,14 @@ CREATE TABLE IF NOT EXISTS bot_texts (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Зеркало services.chat_journal: id сообщений бота, которые могут находиться
+-- ниже меню. Персистим, чтобы рестарт бота не «ослеплял» телепорт меню.
+CREATE TABLE IF NOT EXISTS chat_journal (
+    chat_id    BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    PRIMARY KEY (chat_id, message_id)
+);
+
 INSERT INTO scheduler_state (id) VALUES (1) ON CONFLICT DO NOTHING;
 """
 

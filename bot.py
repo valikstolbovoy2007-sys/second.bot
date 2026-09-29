@@ -26,6 +26,7 @@ from middlewares.maintenance import MaintenanceMiddleware
 from middlewares.throttling import ThrottlingMiddleware
 from services.broadcasts import start_dispatcher, stop_dispatcher
 from services import notifier
+from services.journal_persist import load_journal, start as start_journal_persist, stop as stop_journal_persist
 from services.scheduler import start_scheduler
 from services.texts import warm_cache as warm_texts_cache
 
@@ -46,6 +47,7 @@ async def main() -> None:
 
     await init_db()
     await warm_texts_cache()
+    await load_journal()
 
     session = AiohttpSession(proxy=settings.PROXY_URL) if settings.PROXY_URL else None
     if settings.PROXY_URL:
@@ -73,6 +75,7 @@ async def main() -> None:
 
     scheduler = await start_scheduler(bot)
     await start_dispatcher(bot)
+    await start_journal_persist()
 
     # Для deep-ссылок в уведомлениях (https://t.me/<username>?start=shop_<id>).
     try:
@@ -87,6 +90,7 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await stop_dispatcher()
+        await stop_journal_persist()
         scheduler.shutdown(wait=False)
         await close_db()
         await bot.session.close()

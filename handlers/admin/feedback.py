@@ -19,6 +19,7 @@ from data.repos.admin_roles import visible_shop_ids
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
+from services.chat_journal import journal
 from services.chat_render import render
 
 log = logging.getLogger(__name__)
@@ -325,7 +326,8 @@ async def cb_reply_send(call: CallbackQuery, callback_data: FbCb, state: FSMCont
     # «Ответы» перерисованного меню фидбека. Так в чате остаётся только меню.
     if target["tg_id"] != call.from_user.id:
         try:
-            await bot.send_message(target["tg_id"], "\n".join(parts))
+            sent = await bot.send_message(target["tg_id"], "\n".join(parts))
+            journal.record(target["tg_id"], sent.message_id)
         except Exception as exc:
             log.exception("feedback reply failed")
             await state.set_state(FbStates.confirm)

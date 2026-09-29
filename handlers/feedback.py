@@ -371,6 +371,7 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
             _report_preview(stored_text, is_photo),
             reply_markup=_fb_confirm_kb(),
         )
+        journal.record(message.chat.id, sent.message_id)
         new_id = sent.message_id
     ws.set_active(user_id, new_id)
 
@@ -391,15 +392,16 @@ async def _notify_admin(
         header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
         if is_photo and photo_id:
             caption = f"{header}\n\n{html.escape(text)}" if text else header
-            await bot.send_photo(
+            sent = await bot.send_photo(
                 settings.ADMIN_CHAT_ID, photo_id,
                 caption=caption[:1024],
             )
         else:
-            await bot.send_message(
+            sent = await bot.send_message(
                 settings.ADMIN_CHAT_ID,
                 f"{header}\n\n{html.escape(text)}",
             )
+        journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
     except Exception:
         log.exception("failed to forward feedback to admin chat")
 

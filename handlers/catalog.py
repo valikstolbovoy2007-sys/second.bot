@@ -199,6 +199,7 @@ async def _close_card_back_to_catalog(
         call.message.chat.id, body,
         reply_markup=kb, disable_web_page_preview=True,
     )
+    journal.record(call.message.chat.id, sent.message_id)
     ws.set_active(user_id, sent.message_id)
     try:
         await call.message.delete()

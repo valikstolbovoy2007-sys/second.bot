@@ -13,6 +13,7 @@ from data.repos.users import is_admin, upsert_user
 from keyboards.catalog_kb import shop_card_kb
 from keyboards.main_kb import main_menu
 from services.card_view import send_shop_card
+from services.chat_journal import journal
 from services.chat_render import render, render_focus
 from services.texts import t
 from services.workspace import ws
@@ -102,6 +103,7 @@ async def cb_menu(call: CallbackQuery) -> None:
         # Фото-сообщение (карточка) нельзя превратить в текстовое меню на
         # месте: сначала шлём меню, затем удаляем карточку (без «провала»).
         msg = await call.bot.send_message(chat_id=call.from_user.id, text=text, reply_markup=kb)
+        journal.record(call.from_user.id, msg.message_id)
         try:
             await call.message.delete()
         except TelegramBadRequest:
