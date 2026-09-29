@@ -180,7 +180,7 @@ def format_price_schedule(shop: Shop, today: date) -> str:
             label = label_for_day(shop, cycle_day) or "без скидки"
             if is_arrival:
                 tag = " · сегодня" if is_today else ""
-                lines.append(f"<b>🚚 {date_str}  —  {label}  завоз{tag}</b>")
+                lines.append(f"<b>🚚 {date_str}  —  {label}{tag}</b>")
             elif is_today:
                 lines.append(f"<b>  ▶ {date_str}  —  {label}  · сегодня</b>")
             else:
