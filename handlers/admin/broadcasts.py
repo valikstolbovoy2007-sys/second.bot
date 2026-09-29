@@ -30,7 +30,7 @@ from aiogram.types import (
 from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from data.repos.chains import list_chains
 from data.repos.shops import list_shops_scoped
-from handlers.admin.filters import IsSuperAdmin
+from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import render_screen_call, render_screen_msg, safe_edit
 from services.audit import write as audit_write
 from services.broadcasts import (
@@ -47,8 +47,8 @@ from states.admin_states import BroadcastStates
 
 log = logging.getLogger(__name__)
 router = Router(name="admin_broadcasts")
-router.message.filter(IsSuperAdmin())
-router.callback_query.filter(IsSuperAdmin())
+router.message.filter(IsAdmin())
+router.callback_query.filter(IsAdmin())
 
 TZ = ZoneInfo("Europe/Moscow")
 
@@ -150,8 +150,9 @@ async def _audience_kb(actor_tg_id: int) -> InlineKeyboardMarkup:
                                           callback_data=BcCb(action="aud", value="recent30").pack())])
     rows.append([InlineKeyboardButton(text="🛍 Подписчикам моих магазинов",
                                       callback_data=BcCb(action="aud", value="my").pack())])
-    rows.append([InlineKeyboardButton(text="🔗 Подписчикам сети",
-                                      callback_data=BcCb(action="aud", value="chain").pack())])
+    if is_super:
+        rows.append([InlineKeyboardButton(text="🔗 Подписчикам сети",
+                                          callback_data=BcCb(action="aud", value="chain").pack())])
     rows.append([InlineKeyboardButton(text="🎯 Подписчикам конкретных магазинов",
                                       callback_data=BcCb(action="aud", value="shops").pack())])
     if is_super:
@@ -197,6 +198,9 @@ async def cb_audience(call: CallbackQuery, callback_data: BcCb, state: FSMContex
             await state.update_data(audience={"kind": "subscribers", "shop_ids": list(scope)})
         await _go_text(call, state)
     elif kind == "chain":
+        if not await is_super_admin(call.from_user.id):
+            await call.answer("Только супер-админ", show_alert=True)
+            return
         chains = await list_chains(only_active=True)
         if not chains:
             await call.answer("Нет активных сетей", show_alert=True)
@@ -580,13 +584,20 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
 PAGE = 10
 
 
+async def _can_manage(actor_tg_id: int, bc) -> bool:
+    return await is_super_admin(actor_tg_id) or bc.created_by == actor_tg_id
+
+
 @router.callback_query(BcCb.filter(F.action == "hist"))
 async def cb_hist(call: CallbackQuery, callback_data: BcCb) -> None:
     try:
         page = int(callback_data.value or "0")
     except ValueError:
         page = 0
-    items = await list_recent(PAGE, page * PAGE)
+    scoped = not await is_super_admin(call.from_user.id)
+    items = await list_recent(
+        PAGE, page * PAGE, actor_tg_id=call.from_user.id if scoped else None,
+    )
     if not items:
         await safe_edit(
             call, "История пуста.",
@@ -594,7 +605,8 @@ async def cb_hist(call: CallbackQuery, callback_data: BcCb) -> None:
         )
         await call.answer()
         return
-    lines = [f"📜 <b>История рассылок</b> (стр. {page + 1})", ""]
+    header = "📜 <b>Мои рассылки</b>" if scoped else "📜 <b>История рассылок</b>"
+    lines = [f"{header} (стр. {page + 1})", ""]
     rows: list[list[InlineKeyboardButton]] = []
     for bc in items:
         kind = bc.audience_filter.get("kind", "?")
@@ -626,6 +638,9 @@ async def cb_view(call: CallbackQuery, callback_data: BcCb) -> None:
     bc = await get(bc_id)
     if not bc:
         await call.answer("Не найдено", show_alert=True)
+        return
+    if not await _can_manage(call.from_user.id, bc):
+        await call.answer("Чужую рассылку смотреть нельзя", show_alert=True)
         return
     text = (
         f"📣 <b>Broadcast #{bc.id}</b>\n"
@@ -661,6 +676,10 @@ async def cb_pause(call: CallbackQuery, callback_data: BcCb) -> None:
     except ValueError:
         await call.answer("Битый id", show_alert=True)
         return
+    bc = await get(bc_id)
+    if not bc or not await _can_manage(call.from_user.id, bc):
+        await call.answer("Чужую рассылку менять нельзя", show_alert=True)
+        return
     await request_pause(bc_id)
     await audit_write(call.from_user.id, "broadcast.pause", "broadcast", bc_id, None)
     await call.answer("Поставлено на паузу")
@@ -676,6 +695,10 @@ async def cb_resume(call: CallbackQuery, callback_data: BcCb) -> None:
     except ValueError:
         await call.answer("Битый id", show_alert=True)
         return
+    bc = await get(bc_id)
+    if not bc or not await _can_manage(call.from_user.id, bc):
+        await call.answer("Чужую рассылку менять нельзя", show_alert=True)
+        return
     await request_resume(bc_id)
     await audit_write(call.from_user.id, "broadcast.resume", "broadcast", bc_id, None)
     await call.answer("Возобновлено")
@@ -690,6 +713,10 @@ async def cb_cancel(call: CallbackQuery, callback_data: BcCb) -> None:
         bc_id = int(callback_data.value)
     except ValueError:
         await call.answer("Битый id", show_alert=True)
+        return
+    bc = await get(bc_id)
+    if not bc or not await _can_manage(call.from_user.id, bc):
+        await call.answer("Чужую рассылку менять нельзя", show_alert=True)
         return
     await request_cancel(bc_id)
     await audit_write(call.from_user.id, "broadcast.cancel", "broadcast", bc_id, None)

@@ -105,16 +105,32 @@ async def count_recent_by_actor(actor_tg_id: int, hours: int = 24) -> int:
     return int(n or 0)
 
 
-async def list_recent(limit: int = 20, offset: int = 0) -> list[BroadcastRow]:
+async def list_recent(
+    limit: int = 20,
+    offset: int = 0,
+    actor_tg_id: int | None = None,
+) -> list[BroadcastRow]:
+    """Recent broadcasts. If `actor_tg_id` is set, only that actor's own."""
     async with pool().acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT * FROM broadcasts
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            """,
-            limit, offset,
-        )
+        if actor_tg_id is None:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM broadcasts
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit, offset,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM broadcasts
+                WHERE created_by = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                actor_tg_id, limit, offset,
+            )
     return [_row(r) for r in rows]
 
 
