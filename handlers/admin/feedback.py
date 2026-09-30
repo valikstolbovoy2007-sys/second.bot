@@ -372,10 +372,21 @@ async def cb_reply_send(call: CallbackQuery, callback_data: FbCb, state: FSMCont
     await audit_write(call.from_user.id, "feedback.reply", "feedback", fb_id)
     await state.clear()
     await call.answer("✅ Отправлено")
-    await _open_feedback(
-        call.bot, call.message.chat.id, call.message.message_id,
-        call.from_user.id, fb_id, page,
-    )
+    if call.message.chat.id == settings.ADMIN_CHAT_ID:
+        # В админ-чате оставляем только эхо-уведомление «✍️ Ответ админа…»:
+        # удаляем сообщение, на котором велась переписка с меню.
+        try:
+            await call.bot.delete_message(call.message.chat.id, call.message.message_id)
+        except TelegramBadRequest:
+            await _open_feedback(
+                call.bot, call.message.chat.id, call.message.message_id,
+                call.from_user.id, fb_id, page,
+            )
+    else:
+        await _open_feedback(
+            call.bot, call.message.chat.id, call.message.message_id,
+            call.from_user.id, fb_id, page,
+        )
 
 
 @router.callback_query(FbCb.filter(F.action == "discard"))
