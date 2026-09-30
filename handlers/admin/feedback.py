@@ -357,7 +357,7 @@ async def cb_reply_send(call: CallbackQuery, callback_data: FbCb, state: FSMCont
             await safe_edit(call, _reply_preview(reply_text), _reply_confirm_kb())
             await call.answer(f"❌ Не отправилось: {html.escape(str(exc))[:80]}", show_alert=True)
             return
-        await _notify_admin_chat(bot, target, fb_id, reply_text)
+    await _notify_admin_chat(bot, target, fb_id, reply_text)
     async with pool().acquire() as conn:
         await conn.execute(
             "INSERT INTO admin_messages (from_tg_id, to_tg_id, text, feedback_id) VALUES ($1,$2,$3,$4)",
