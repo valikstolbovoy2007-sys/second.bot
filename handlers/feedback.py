@@ -390,16 +390,21 @@ async def _notify_admin(
             if shop:
                 shop_label = f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
         header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
+        from handlers.admin.feedback import FbCb
+        reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Ответить", callback_data=FbCb(action="open", fb_id=fb_id, page=0).pack())],
+        ])
         if is_photo and photo_id:
             caption = f"{header}\n\n{html.escape(text)}" if text else header
             sent = await bot.send_photo(
                 settings.ADMIN_CHAT_ID, photo_id,
-                caption=caption[:1024],
+                caption=caption[:1024], reply_markup=reply_kb,
             )
         else:
             sent = await bot.send_message(
                 settings.ADMIN_CHAT_ID,
                 f"{header}\n\n{html.escape(text)}",
+                reply_markup=reply_kb,
             )
         journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
     except Exception:

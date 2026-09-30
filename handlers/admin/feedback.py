@@ -112,7 +112,12 @@ async def _notify_admin_chat(bot: Bot, target, fb_id: int, reply_text: str) -> N
             f"<b>Вопрос:</b>\n{html.escape(target['text'] or '')}\n\n"
             f"<b>Ответ:</b>\n{reply_text}"
         )
-        sent = await bot.send_message(settings.ADMIN_CHAT_ID, text)
+        sent = await bot.send_message(
+            settings.ADMIN_CHAT_ID, text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💬 Ответить", callback_data=FbCb(action="open", fb_id=fb_id, page=0).pack())],
+            ]),
+        )
         journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
     except Exception:
         log.exception("failed to forward admin reply to admin chat")
