@@ -115,7 +115,10 @@ async def _notify_admin_chat(bot: Bot, target, fb_id: int, reply_text: str) -> N
         sent = await bot.send_message(
             settings.ADMIN_CHAT_ID, text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💬 Ответить", callback_data=FbCb(action="open", fb_id=fb_id, page=0).pack())],
+                [
+                    InlineKeyboardButton(text="↩️ Ответить", callback_data=FbCb(action="reply", fb_id=fb_id, page=0).pack()),
+                    InlineKeyboardButton(text="✅ Закрыть", callback_data=FbCb(action="close", fb_id=fb_id, page=0).pack()),
+                ],
             ]),
         )
         journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
@@ -171,8 +174,9 @@ async def _open_feedback(
     rows = [
         [InlineKeyboardButton(text="↩️ Ответить", callback_data=FbCb(action="reply", fb_id=row['id'], page=page).pack())],
         [InlineKeyboardButton(text="✅ Закрыть", callback_data=FbCb(action="close", fb_id=row['id'], page=page).pack())],
-        [InlineKeyboardButton(text="← К списку", callback_data=FbCb(action="list", page=page).pack())],
     ]
+    if chat_id != settings.ADMIN_CHAT_ID:
+        rows.append([InlineKeyboardButton(text="← К списку", callback_data=FbCb(action="list", page=page).pack())])
     return await render(bot, chat_id, message_id, text, InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -243,13 +247,20 @@ async def cb_open(call: CallbackQuery, callback_data: FbCb) -> None:
 
 
 @router.callback_query(FbCb.filter(F.action == "close"))
-async def cb_close(call: CallbackQuery, callback_data: FbCb) -> None:
+async def cb_close(call: CallbackQuery, callback_data: FbCb, state: FSMContext) -> None:
     async with pool().acquire() as conn:
         await conn.execute("UPDATE feedback SET status='closed' WHERE id=$1", callback_data.fb_id)
     await audit_write(call.from_user.id, "feedback.close", "feedback", callback_data.fb_id)
+    await state.clear()
     await call.answer("Закрыт", show_alert=False)
-    callback_data2 = FbCb(action="open", fb_id=callback_data.fb_id, page=callback_data.page)
-    await cb_open(call, callback_data2)
+    if call.message.chat.id == settings.ADMIN_CHAT_ID:
+        # В админ-чате закрытие завершает тред: сообщение убираем из чата.
+        try:
+            await call.bot.delete_message(call.message.chat.id, call.message.message_id)
+        except TelegramBadRequest:
+            await cb_open(call, FbCb(action="open", fb_id=callback_data.fb_id, page=callback_data.page))
+        return
+    await cb_open(call, FbCb(action="open", fb_id=callback_data.fb_id, page=callback_data.page))
 
 
 @router.callback_query(FbCb.filter(F.action == "reply"))

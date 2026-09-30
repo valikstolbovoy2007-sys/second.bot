@@ -392,7 +392,10 @@ async def _notify_admin(
         header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
         from handlers.admin.feedback import FbCb
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Ответить", callback_data=FbCb(action="open", fb_id=fb_id, page=0).pack())],
+            [
+                InlineKeyboardButton(text="↩️ Ответить", callback_data=FbCb(action="reply", fb_id=fb_id, page=0).pack()),
+                InlineKeyboardButton(text="✅ Закрыть", callback_data=FbCb(action="close", fb_id=fb_id, page=0).pack()),
+            ],
         ])
         if is_photo and photo_id:
             caption = f"{header}\n\n{html.escape(text)}" if text else header
