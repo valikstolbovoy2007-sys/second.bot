@@ -16,6 +16,7 @@ from aiogram.types import (
 
 from data.db import pool
 from data.repos.admin_roles import visible_shop_ids
+from config import settings
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 from services.audit import write as audit_write
@@ -85,7 +86,7 @@ async def _fetch_fb_target(fb_id: int):
     async with pool().acquire() as conn:
         return await conn.fetchrow(
             """
-            SELECT u.tg_id, f.text, f.created_at, s.name AS shop_name
+            SELECT u.tg_id, u.username, f.text, f.created_at, s.name AS shop_name
             FROM feedback f
             JOIN users u ON u.id = f.user_id
             LEFT JOIN shops s ON s.id = f.shop_id
@@ -93,6 +94,28 @@ async def _fetch_fb_target(fb_id: int):
             """,
             fb_id,
         )
+
+
+async def _notify_admin_chat(bot: Bot, target, fb_id: int, reply_text: str) -> None:
+    """Дублируем ответ админа в админ-чат — как вопросы фидбека, чтобы
+    вся переписка была в одном чате. Ошибка некритична."""
+    if not settings.ADMIN_CHAT_ID:
+        return
+    try:
+        username = target.get("username")
+        uname = f"@{username}" if username else f"id={target['tg_id']}"
+        shop_label = ""
+        if target.get("shop_name"):
+            shop_label = f"\n🛍 Магазин: <b>{html.escape(target['shop_name'])}</b>"
+        text = (
+            f"✍️ <b>Ответ админа на фидбек #{fb_id}</b> от {html.escape(uname)}:{shop_label}\n\n"
+            f"<b>Вопрос:</b>\n{html.escape(target['text'] or '')}\n\n"
+            f"<b>Ответ:</b>\n{reply_text}"
+        )
+        sent = await bot.send_message(settings.ADMIN_CHAT_ID, text)
+        journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
+    except Exception:
+        log.exception("failed to forward admin reply to admin chat")
 
 
 async def _open_feedback(
@@ -334,6 +357,7 @@ async def cb_reply_send(call: CallbackQuery, callback_data: FbCb, state: FSMCont
             await safe_edit(call, _reply_preview(reply_text), _reply_confirm_kb())
             await call.answer(f"❌ Не отправилось: {html.escape(str(exc))[:80]}", show_alert=True)
             return
+        await _notify_admin_chat(bot, target, fb_id, reply_text)
     async with pool().acquire() as conn:
         await conn.execute(
             "INSERT INTO admin_messages (from_tg_id, to_tg_id, text, feedback_id) VALUES ($1,$2,$3,$4)",
