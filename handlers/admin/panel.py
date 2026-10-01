@@ -23,10 +23,10 @@ def _panel_kb(is_super: bool) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🛍 Мои магазины", callback_data=ShopCb(action="list", page=0).pack())],
         [InlineKeyboardButton(text="📦 Завозы", callback_data="adm:arr:menu")],
         [InlineKeyboardButton(text="💬 Фидбек", callback_data=FbCb(action="list", page=0).pack())],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
         [InlineKeyboardButton(text="📣 Рассылка", callback_data="adm:bc:menu")],
     ]
     if is_super:
+        rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")])
         rows.append([InlineKeyboardButton(text="🛡 Супер-админ", callback_data="sa:menu")])
     rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="menu:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

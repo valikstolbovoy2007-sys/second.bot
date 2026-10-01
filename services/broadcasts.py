@@ -65,17 +65,19 @@ async def enqueue(
     audience_filter: dict[str, Any],
     created_by: int,
     scheduled_at: datetime | None = None,
+    status: str = "pending",
 ) -> int:
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO broadcasts (payload, audience_filter, scheduled_at, status, created_by)
-            VALUES ($1::jsonb, $2::jsonb, $3, 'pending', $4)
+            VALUES ($1::jsonb, $2::jsonb, $3, $4, $5)
             RETURNING id
             """,
             json.dumps(payload, ensure_ascii=False),
             json.dumps(audience_filter, ensure_ascii=False),
             scheduled_at,
+            status,
             created_by,
         )
     return int(row["id"])
@@ -143,14 +145,14 @@ async def set_status(bc_id: int, status: str) -> None:
 
 
 async def request_cancel(bc_id: int) -> None:
-    """Marks a broadcast as cancelled.
+    """Cancel a broadcast.
 
     If the dispatcher is currently sending it, it will pick up the new status
-    on the next progress checkpoint and stop.
+    on the next progress checkpoint. Includes broadcasts waiting for review.
     """
     async with pool().acquire() as conn:
         await conn.execute(
-            "UPDATE broadcasts SET status = 'cancelled', finished_at = now() WHERE id = $1 AND status IN ('pending','running','paused')",
+            "UPDATE broadcasts SET status = 'cancelled', finished_at = now() WHERE id = $1 AND status IN ('pending','pending_review','running','paused')",
             bc_id,
         )
 

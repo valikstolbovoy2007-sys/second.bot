@@ -18,7 +18,7 @@ from aiogram.types import (
 )
 
 from data.db import pool
-from data.repos.admin_roles import visible_shop_ids
+from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
 
@@ -26,6 +26,14 @@ log = logging.getLogger(__name__)
 router = Router(name="admin_stats")
 router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
+
+
+async def _guard_super(call: CallbackQuery) -> bool:
+    """Статистика доступна только супер-админам."""
+    if not await is_super_admin(call.from_user.id):
+        await call.answer("📊 Статистика доступна только супер-админу", show_alert=True)
+        return False
+    return True
 
 
 def _menu_kb() -> InlineKeyboardMarkup:
@@ -40,6 +48,8 @@ def _menu_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "adm:stats")
 async def cb_stats(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     await safe_edit(call, "📊 <b>Статистика</b>", _menu_kb())
     await call.answer()
 
@@ -92,6 +102,8 @@ async def _scoped_overview(actor_tg_id: int) -> dict:
 
 @router.callback_query(F.data == "adm:st:overview")
 async def cb_overview(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     s = await _scoped_overview(call.from_user.id)
     lines = [
         "📊 <b>Обзор</b>",
@@ -110,6 +122,8 @@ async def cb_overview(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:st:top")
 async def cb_top(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     scope = await visible_shop_ids(call.from_user.id)
     async with pool().acquire() as conn:
         if scope is None:
@@ -148,6 +162,8 @@ async def cb_top(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:st:notif")
 async def cb_notif(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     scope = await visible_shop_ids(call.from_user.id)
     today = date.today()
     async with pool().acquire() as conn:
@@ -200,6 +216,8 @@ async def cb_notif(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:st:csvmenu")
 async def cb_csv_menu(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     rows = [
         [InlineKeyboardButton(text="🛍 Магазины", callback_data="adm:st:csv:shops")],
         [InlineKeyboardButton(text="👥 Пользователи (моего scope)", callback_data="adm:st:csv:users")],
@@ -221,6 +239,8 @@ def _csv_bytes(headers: list[str], rows: list[list]) -> bytes:
 
 @router.callback_query(F.data == "adm:st:csv:shops")
 async def cb_csv_shops(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     scope = await visible_shop_ids(call.from_user.id)
     async with pool().acquire() as conn:
         if scope is None:
@@ -255,6 +275,8 @@ async def cb_csv_shops(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:st:csv:users")
 async def cb_csv_users(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     scope = await visible_shop_ids(call.from_user.id)
     async with pool().acquire() as conn:
         if scope is None:
@@ -291,6 +313,8 @@ async def cb_csv_users(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "adm:st:csv:notif")
 async def cb_csv_notif(call: CallbackQuery) -> None:
+    if not await _guard_super(call):
+        return
     scope = await visible_shop_ids(call.from_user.id)
     cutoff = date.today() - timedelta(days=30)
     async with pool().acquire() as conn:

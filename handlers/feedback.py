@@ -377,13 +377,13 @@ async def fb_save(message: Message, state: FSMContext, bot: Bot) -> None:
 
 
 async def _notify_admin(
-    bot: Bot, *, user_id: int, username: str | None, shop_id: int | None,
+    bot: Bot, *, user_id: int, user_tg_id: int, username: str | None, shop_id: int | None,
     fb_id: int, text: str, is_photo: bool, photo_id: str | None,
 ) -> None:
     if not settings.ADMIN_CHAT_ID:
         return
     try:
-        uname = f"@{username}" if username else f"id={user_id}"
+        uname = f"@{username}" if username else f"id={user_tg_id}"
         shop_label = ""
         if shop_id:
             shop = await get_shop(shop_id)
@@ -397,19 +397,31 @@ async def _notify_admin(
                 InlineKeyboardButton(text="✅ Закрыть", callback_data=FbCb(action="close", fb_id=fb_id, page=0).pack()),
             ],
         ])
-        if is_photo and photo_id:
-            caption = f"{header}\n\n{html.escape(text)}" if text else header
-            sent = await bot.send_photo(
-                settings.ADMIN_CHAT_ID, photo_id,
-                caption=caption[:1024], reply_markup=reply_kb,
-            )
-        else:
-            sent = await bot.send_message(
-                settings.ADMIN_CHAT_ID,
-                f"{header}\n\n{html.escape(text)}",
-                reply_markup=reply_kb,
-            )
-        journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
+
+        targets: list[int] = [settings.ADMIN_CHAT_ID]
+        if shop_id:
+            # Фидбек по магазину дублируем админам конкретного магазина —
+            # они отвечают прямо из ЛС с кнопками ниже.
+            from data.repos.admin_roles import shop_admins
+            targets += [tg for tg in await shop_admins(shop_id) if tg != user_tg_id]
+
+        for chat_id in targets:
+            try:
+                if is_photo and photo_id:
+                    caption = f"{header}\n\n{html.escape(text)}" if text else header
+                    sent = await bot.send_photo(
+                        chat_id, photo_id,
+                        caption=caption[:1024], reply_markup=reply_kb,
+                    )
+                else:
+                    sent = await bot.send_message(
+                        chat_id,
+                        f"{header}\n\n{html.escape(text)}",
+                        reply_markup=reply_kb,
+                    )
+                journal.record(chat_id, sent.message_id)
+            except Exception:
+                log.exception("failed to forward feedback to %s", chat_id)
     except Exception:
         log.exception("failed to forward feedback to admin chat")
 
@@ -423,7 +435,7 @@ async def cb_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     fb_id = await save_feedback(user_id, text, shop_id=data.get("shop_id"))
     await _notify_admin(
         bot,
-        user_id=user_id, username=call.from_user.username,
+        user_id=user_id, user_tg_id=call.from_user.id, username=call.from_user.username,
         shop_id=data.get("shop_id"), fb_id=fb_id, text=text,
         is_photo=bool(data.get("fb_is_photo")), photo_id=data.get("fb_photo_id"),
     )
@@ -453,7 +465,7 @@ async def cb_report_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> No
     fb_id = await save_feedback(user_id, text, shop_id=data.get("shop_id"))
     await _notify_admin(
         bot,
-        user_id=user_id, username=call.from_user.username,
+        user_id=user_id, user_tg_id=call.from_user.id, username=call.from_user.username,
         shop_id=data.get("shop_id"), fb_id=fb_id, text=text,
         is_photo=bool(data.get("report_is_photo")), photo_id=data.get("report_photo_id"),
     )

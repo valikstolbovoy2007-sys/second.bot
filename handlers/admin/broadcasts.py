@@ -17,7 +17,8 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -27,6 +28,8 @@ from aiogram.types import (
     Message,
 )
 
+from config import settings
+from data.db import pool
 from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from data.repos.chains import list_chains
 from data.repos.shops import list_shops_scoped
@@ -42,7 +45,9 @@ from services.broadcasts import (
     request_pause,
     request_resume,
     resolve_audience,
+    set_status,
 )
+from services.chat_journal import journal
 from states.admin_states import BroadcastStates
 
 log = logging.getLogger(__name__)
@@ -555,19 +560,26 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
             sched_dt = datetime.fromisoformat(sched_str)
         except ValueError:
             sched_dt = None
+    needs_review = not await is_super_admin(call.from_user.id) and bool(settings.ADMIN_CHAT_ID)
     bc_id = await enqueue(
         payload=info["payload"],
         audience_filter=info["audience"],
         created_by=call.from_user.id,
         scheduled_at=sched_dt,
+        status="pending_review" if needs_review else "pending",
     )
     await audit_write(
         call.from_user.id, "broadcast.enqueue", "broadcast", bc_id,
         {"audience": info["audience"], "scheduled_at": sched_str,
-         "audience_size": info["audience_size"]},
+         "audience_size": info["audience_size"], "status": "pending_review" if needs_review else "pending"},
     )
+    if needs_review:
+        await _send_review_request(call.bot, bc_id)
     await state.clear()
-    label = "Запущена" if not sched_dt else f"Запланирована на {sched_str}"
+    if needs_review:
+        label = f"Отправлена на модерацию ({sched_str})" if sched_dt else "Отправлена на модерацию"
+    else:
+        label = "Запущена" if not sched_dt else f"Запланирована на {sched_str}"
     await render_screen_call(
         call, state,
         f"✅ Рассылка #{bc_id} {label.lower()} (≈{info['audience_size']} получателей).",
@@ -577,6 +589,105 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
         ]),
     )
     await call.answer("Поставлено в очередь")
+
+
+async def _send_review_request(bot: Bot, bc_id: int) -> None:
+    """Запрос на одобрение рассылки обычного админа — в чат супер-админов."""
+    bc = await get(bc_id)
+    if not bc or not settings.ADMIN_CHAT_ID:
+        return
+    try:
+        snippet = html.escape((bc.payload.get("text") or "").replace("\n", " ")[:300])
+        media = "📷 фото" if bc.payload.get("photo") else (
+            "📎 документ" if bc.payload.get("document") else "—")
+        sched = "сейчас" if not bc.scheduled_at else bc.scheduled_at.strftime("%d.%m %H:%M")
+        text = (
+            "🕓 <b>Запрос на рассылку</b>\n\n"
+            f"Автор: <code>{bc.created_by}</code>\n"
+            f"Аудитория: {_format_audience(bc.audience_filter)}\n"
+            f"Медиа: {media}\n"
+            f"Время: {sched}\n\n"
+            f"<b>Текст:</b>\n{snippet}"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=BcCb(action="approve", value=str(bc_id)).pack()),
+            InlineKeyboardButton(text="⛔️ Запретить", callback_data=BcCb(action="deny", value=str(bc_id)).pack()),
+        ]])
+        sent = await bot.send_message(settings.ADMIN_CHAT_ID, text, reply_markup=kb)
+        journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
+    except Exception:
+        log.exception("failed to send broadcast review request for %s", bc_id)
+
+
+async def _notify_creator(bot: Bot, bc_id: int, ok: bool) -> None:
+    bc = await get(bc_id)
+    if not bc:
+        return
+    try:
+        msg = (f"✅ Твоя рассылка #{bc_id} одобрена супер-админом."
+               if ok else f"⛔️ Твоя рассылка #{bc_id} отклонена супер-админом.")
+        sent = await bot.send_message(bc.created_by, msg)
+        journal.record(bc.created_by, sent.message_id)
+    except TelegramBadRequest:
+        pass
+    except Exception:
+        log.exception("failed to notify broadcast creator #%s", bc_id)
+
+
+@router.callback_query(BcCb.filter(F.action == "approve"))
+async def cb_approve(call: CallbackQuery, callback_data: BcCb, bot: Bot) -> None:
+    if not await is_super_admin(call.from_user.id):
+        await call.answer("Только супер-админ", show_alert=True)
+        return
+    try:
+        bc_id = int(callback_data.value or "0")
+    except ValueError:
+        await call.answer("Битый id", show_alert=True)
+        return
+    bc = await get(bc_id)
+    if not bc:
+        await call.answer("Рассылка не найдена", show_alert=True)
+        return
+    if bc.status != "pending_review":
+        await call.answer("Уже обработана", show_alert=True)
+        return
+    await set_status(bc_id, "pending")
+    await audit_write(call.from_user.id, "broadcast.approve", "broadcast", bc_id)
+    try:
+        await bot.delete_message(call.message.chat.id, call.message.message_id)
+        journal.remove(call.message.chat.id, call.message.message_id)
+    except TelegramBadRequest:
+        pass
+    await _notify_creator(bot, bc_id, ok=True)
+    await call.answer("✅ Одобрена")
+
+
+@router.callback_query(BcCb.filter(F.action == "deny"))
+async def cb_deny(call: CallbackQuery, callback_data: BcCb, bot: Bot) -> None:
+    if not await is_super_admin(call.from_user.id):
+        await call.answer("Только супер-админ", show_alert=True)
+        return
+    try:
+        bc_id = int(callback_data.value or "0")
+    except ValueError:
+        await call.answer("Битый id", show_alert=True)
+        return
+    bc = await get(bc_id)
+    if not bc:
+        await call.answer("Рассылка не найдена", show_alert=True)
+        return
+    if bc.status != "pending_review":
+        await call.answer("Уже обработана", show_alert=True)
+        return
+    await request_cancel(bc_id)
+    await audit_write(call.from_user.id, "broadcast.deny", "broadcast", bc_id)
+    try:
+        await bot.delete_message(call.message.chat.id, call.message.message_id)
+        journal.remove(call.message.chat.id, call.message.message_id)
+    except TelegramBadRequest:
+        pass
+    await _notify_creator(bot, bc_id, ok=False)
+    await call.answer("⛔️ Запрещена")
 
 
 # ---------- history ----------
@@ -661,7 +772,7 @@ async def cb_view(call: CallbackQuery, callback_data: BcCb) -> None:
                                           callback_data=BcCb(action="resume", value=str(bc.id)).pack())])
         rows.append([InlineKeyboardButton(text="🛑 Отмена",
                                           callback_data=BcCb(action="cancel", value=str(bc.id)).pack())])
-    elif bc.status == "pending":
+    elif bc.status in ("pending", "pending_review"):
         rows.append([InlineKeyboardButton(text="🛑 Отмена",
                                           callback_data=BcCb(action="cancel", value=str(bc.id)).pack())])
     rows.append([InlineKeyboardButton(text="← К списку", callback_data=BcCb(action="hist", value="0").pack())])

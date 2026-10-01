@@ -15,7 +15,7 @@ router.callback_query.filter(IsSuperAdmin())
 # Лимит Telegram на длину текстового сообщения.
 _MAX_TEXT = 3900
 # Заголовок + строка ост-флага.
-_HEADER = "👥 <b>Все пользователи (старые сверху)</b>"
+_HEADER = "👥 <b>Все пользователи (новые сверху)</b>"
 
 
 def _back_kb() -> InlineKeyboardMarkup:
@@ -35,7 +35,7 @@ async def _all_users_with_shops() -> list[dict]:
             LEFT JOIN subscriptions sub ON sub.user_id = u.id
             LEFT JOIN shops s ON s.id = sub.shop_id
             GROUP BY u.id, u.username, u.created_at
-            ORDER BY u.created_at ASC, u.id ASC
+            ORDER BY u.created_at DESC, u.id DESC
             """
         )
     return [dict(r) for r in rows]
