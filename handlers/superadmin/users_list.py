@@ -15,7 +15,7 @@ router.callback_query.filter(IsSuperAdmin())
 # Лимит Telegram на длину текстового сообщения.
 _MAX_TEXT = 3900
 # Заголовок + строка ост-флага.
-_HEADER = "👥 <b>Все пользователи (новые сверху)</b>"
+_HEADER = "👥 <b>Все пользователи (новые снизу)</b>"
 
 
 def _back_kb() -> InlineKeyboardMarkup:
@@ -35,7 +35,7 @@ async def _all_users_with_shops() -> list[dict]:
             LEFT JOIN subscriptions sub ON sub.user_id = u.id
             LEFT JOIN shops s ON s.id = sub.shop_id
             GROUP BY u.id, u.username, u.created_at
-            ORDER BY u.created_at DESC, u.id DESC
+            ORDER BY u.created_at ASC, u.id ASC
             """
         )
     return [dict(r) for r in rows]
@@ -60,15 +60,19 @@ async def cb_users_list(call: CallbackQuery) -> None:
         await call.answer()
         return
 
-    lines, shown, skipped = [_HEADER, ""], 0, 0
-    for u in users:
-        line = _user_line(u)
-        if len("\n".join(lines)) + len(line) + 1 > _MAX_TEXT:
-            skipped = len(users) - shown
+    lines_all = [_user_line(u) for u in users]
+    # Список хронологический (новые снизу). Если всё не влезает —
+    # отбрасываем старых сверху и показываем хвост самых новых, что влезает.
+    lines_chosen: list[str] = []
+    start = len(lines_all)
+    for i in range(len(lines_all) - 1, -1, -1):
+        ln = lines_all[i]
+        if len("\n".join(lines_chosen)) + len(ln) + 1 > _MAX_TEXT:
             break
-        lines.append(line)
-        shown += 1
+        lines_chosen.insert(0, ln)
+        start = i
+    skipped = start
     if skipped > 0:
-        lines.append(f"\n<i>… и ещё {skipped} не показаны (лимит сообщения)</i>")
-    await safe_edit(call, "\n".join(lines), _back_kb())
+        lines_chosen[-1] = f"{lines_chosen[-1]}\n<i>… и ещё {skipped} старых не показаны (лимит сообщения)</i>"
+    await safe_edit(call, "\n".join([_HEADER, ""] + lines_chosen), _back_kb())
     await call.answer()
