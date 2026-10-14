@@ -189,7 +189,7 @@ async def cb_list(call: CallbackQuery, callback_data: QCb) -> None:
             *args_full,
         )
         total = int(await conn.fetchval(
-            f"SELECT count(*) FROM questions {where}", *args
+            f"SELECT count(*) FROM questions q {where}", *args
         ) or 0)
     if total == 0:
         await safe_edit(
