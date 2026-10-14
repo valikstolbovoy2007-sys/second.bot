@@ -717,21 +717,26 @@ async def cb_deny(call: CallbackQuery, callback_data: BcCb, bot: Bot, state: FSM
         review_msg_id=call.message.message_id,
     )
     await call.answer()
-    await bot.send_message(
+    prompt = await bot.send_message(
         call.message.chat.id,
         f"⛔️ <b>Запрет рассылки #{bc_id}</b>\n\n"
         "Напиши причину — она уйдёт автору рассылки.\n\n"
         "<i>Отменить — /cancel</i>",
     )
+    await state.update_data(prompt_id=prompt.message_id)
 
 
 @router.message(ReviewStates.deny_reason, Command("cancel"))
-async def msg_deny_cancel(message: Message, state: FSMContext) -> None:
+async def msg_deny_cancel(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
     await state.clear()
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
+    for mid in (message.message_id, data.get("prompt_id")):
+        if mid is None:
+            continue
+        try:
+            await bot.delete_message(message.chat.id, mid)
+        except TelegramBadRequest:
+            pass
 
 
 @router.message(ReviewStates.deny_reason, F.text)
@@ -750,17 +755,17 @@ async def msg_deny_reason(message: Message, state: FSMContext, bot: Bot) -> None
             message.from_user.id, "broadcast.deny", "broadcast", bc_id,
             {"reason": reason},
         )
-    # Запрос убираем из чата обратной связи — решение принято.
-    try:
-        await bot.delete_message(data["review_chat_id"], data["review_msg_id"])
-        journal.remove(data["review_chat_id"], data["review_msg_id"])
-    except (TelegramBadRequest, KeyError, TypeError):
-        pass
+    # Промпт и запрос убираем из чата обратной связи — решение принято;
+    # причина (сообщение супер-админа) остаётся как запись решения.
+    for mid in (data.get("prompt_id"), data.get("review_msg_id")):
+        if mid is None:
+            continue
+        try:
+            await bot.delete_message(data["review_chat_id"], mid)
+            journal.remove(data["review_chat_id"], mid)
+        except (TelegramBadRequest, KeyError, TypeError):
+            pass
     await _notify_creator(bot, bc_id, ok=False, reason=reason)
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
 
 
 # ---------- history ----------
