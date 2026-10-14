@@ -15,7 +15,7 @@ from aiogram.types import (
 )
 
 from data.db import pool
-from data.repos.admin_roles import visible_shop_ids
+from data.repos.admin_roles import is_super_admin, visible_shop_ids
 from config import settings
 from handlers.admin.filters import IsAdmin
 from handlers.admin.ui import safe_edit
@@ -137,8 +137,11 @@ async def _open_feedback(
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             f"""
-            SELECT f.id, f.text, f.status, f.created_at, f.shop_id, u.tg_id AS user_tg, u.username
-            FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+            SELECT f.id, f.text, f.status, f.created_at, f.shop_id,
+                   u.tg_id AS user_tg, u.username, s.name AS shop_name
+            FROM feedback f
+            LEFT JOIN users u ON u.id = f.user_id
+            LEFT JOIN shops s ON s.id = f.shop_id
             {cond} f.id = ${pl + 1}
             """,
             *args, fb_id,
@@ -156,9 +159,12 @@ async def _open_feedback(
             """,
             row['id'],
         )
+    source = (f"🛍 Магазин: <b>{html.escape(row['shop_name'])}</b>"
+              if row['shop_name'] else "🌐 Общее (из главного меню)")
     parts = [
         f"💬 <b>Фидбек #{row['id']}</b>  ({row['status']})",
         f"От: @{row['username'] or '—'} ({row['user_tg']})",
+        source,
         f"Создано: {row['created_at'].strftime('%d.%m %H:%M')}",
         "────────────────",
         html.escape(row['text']),
@@ -175,13 +181,16 @@ async def _open_feedback(
         [InlineKeyboardButton(text="↩️ Ответить", callback_data=FbCb(action="reply", fb_id=row['id'], page=page).pack())],
         [InlineKeyboardButton(text="✅ Закрыть", callback_data=FbCb(action="close", fb_id=row['id'], page=page).pack())],
     ]
-    if chat_id != settings.ADMIN_CHAT_ID:
+    if chat_id != settings.ADMIN_CHAT_ID and await is_super_admin(actor_tg_id):
         rows.append([InlineKeyboardButton(text="← К списку", callback_data=FbCb(action="list", page=page).pack())])
     return await render(bot, chat_id, message_id, text, InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(FbCb.filter(F.action == "list"))
 async def cb_list(call: CallbackQuery, callback_data: FbCb) -> None:
+    if not await is_super_admin(call.from_user.id):
+        await call.answer("💬 Раздел «Фидбек» доступен только супер-админу", show_alert=True)
+        return
     page = max(0, callback_data.page)
     where, args = await _scope_clause(call.from_user.id)
     pl = len(args)
@@ -190,9 +199,10 @@ async def cb_list(call: CallbackQuery, callback_data: FbCb) -> None:
         rows = await conn.fetch(
             f"""
             SELECT f.id, f.text, f.status, f.created_at, f.shop_id,
-                   u.tg_id AS user_tg, u.username
+                   u.tg_id AS user_tg, u.username, s.name AS shop_name
             FROM feedback f
             LEFT JOIN users u ON u.id = f.user_id
+            LEFT JOIN shops s ON s.id = f.shop_id
             {where}
             ORDER BY (f.status = 'closed') ASC, f.created_at DESC
             LIMIT ${pl + 1} OFFSET ${pl + 2}
@@ -215,7 +225,8 @@ async def cb_list(call: CallbackQuery, callback_data: FbCb) -> None:
     for r in rows:
         emoji = {"new": "🆕", "in_progress": "🔄", "closed": "✅"}.get(r["status"], "•")
         preview = (r["text"] or "")[:60].replace("\n", " ")
-        lines.append(f"{emoji} #{r['id']} от @{r['username'] or r['user_tg'] or '—'}: {html.escape(preview)}")
+        src = f"[{html.escape(r['shop_name'])}]" if r["shop_name"] else "[общее]"
+        lines.append(f"{emoji} #{r['id']} {src} от @{r['username'] or r['user_tg'] or '—'}: {html.escape(preview)}")
         btn_rows.append([InlineKeyboardButton(
             text=f"{emoji} #{r['id']}",
             callback_data=FbCb(action="open", fb_id=r["id"], page=page).pack(),

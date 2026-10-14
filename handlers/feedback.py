@@ -387,8 +387,10 @@ async def _notify_admin(
         shop_label = ""
         if shop_id:
             shop = await get_shop(shop_id)
-            if shop:
-                shop_label = f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
+            shop_label = (f"\n🛍 Магазин: <b>{html.escape(shop.name)}</b>"
+                          if shop else "\n🛍 Магазин: <i>удалён</i>")
+        else:
+            shop_label = "\n🌐 Общее (из главного меню)"
         header = f"📨 <b>Feedback #{fb_id}</b> от {html.escape(uname)}:{shop_label}"
         from handlers.admin.feedback import FbCb
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -399,11 +401,6 @@ async def _notify_admin(
         ])
 
         targets: list[int] = [settings.ADMIN_CHAT_ID]
-        if shop_id:
-            # Фидбек по магазину дублируем админам конкретного магазина —
-            # они отвечают прямо из ЛС с кнопками ниже.
-            from data.repos.admin_roles import shop_admins
-            targets += [tg for tg in await shop_admins(shop_id) if tg != user_tg_id]
 
         for chat_id in targets:
             try:
