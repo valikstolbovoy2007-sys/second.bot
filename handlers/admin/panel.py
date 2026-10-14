@@ -18,7 +18,7 @@ router.message.filter(IsAdmin())
 router.callback_query.filter(IsAdmin())
 
 
-def _panel_kb(is_super: bool) -> InlineKeyboardMarkup:
+def panel_kb(is_super: bool) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🛍 Мои магазины", callback_data=ShopCb(action="list", page=0).pack())],
         [InlineKeyboardButton(text="📦 Завозы", callback_data="adm:arr:menu")],
@@ -27,18 +27,24 @@ def _panel_kb(is_super: bool) -> InlineKeyboardMarkup:
     if is_super:
         rows.append([InlineKeyboardButton(text="💬 Фидбек", callback_data=FbCb(action="list", page=0).pack())])
         rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")])
-        rows.append([InlineKeyboardButton(text="🛡 Супер-админ", callback_data="sa:menu")])
+        rows.append([InlineKeyboardButton(text="👥 Админы и магазины", callback_data="sa:admins:list:0")])
+        rows.append([InlineKeyboardButton(text="👥 Все пользователи", callback_data="sa:users:list")])
+        rows.append([InlineKeyboardButton(text="🎨 Шаблон карточки", callback_data="sa:tpl:view")])
+        rows.append([InlineKeyboardButton(text="📝 Тексты бота", callback_data="sa:texts")])
+        rows.append([InlineKeyboardButton(text="🛠 Режим обслуживания", callback_data="sa:maint:menu")])
     rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="menu:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _panel_text(role: str) -> str:
+def panel_text(role: str) -> str:
     if role == "super_admin":
         return (
             "🛡 <b>Супер-админ</b>\n\n"
-            "Здесь видны все магазины. Чтобы попасть в управление ботом "
-            "(добавить магазин, назначить админа, рассылки, шаблон карточки) — "
-            "жми «🛡 Супер-админ»."
+            "Все функции — в этом окне, без лишних переходов:\n"
+            "• 🛍 магазины: создать/удалить — «Мои магазины» → внизу «🆕 Добавить магазин»\n"
+            "• 👥 админы и назначение им магазинов, все пользователи\n"
+            "• 💬 фидбек, 📊 статистика, 📣 рассылки\n"
+            "• 🎨 шаблон карточки, 📝 тексты бота, 🛠 режим обслуживания"
         )
     return (
         "🛠 <b>Админ</b>\n\n"
@@ -56,7 +62,7 @@ async def cmd_admin(message: Message, state: FSMContext) -> None:
     role = await get_role(message.from_user.id) or "admin"
     await render_focus(
         message.bot, message,
-        _panel_text(role), _panel_kb(role == "super_admin"),
+        panel_text(role), panel_kb(role == "super_admin"),
     )
 
 
@@ -64,7 +70,7 @@ async def show_panel(call: CallbackQuery, state: FSMContext) -> None:
     """Перерисовать админ-панель на сообщении колбэка (возврат из подэкран)."""
     await state.clear()
     role = await get_role(call.from_user.id) or "admin"
-    await safe_edit(call, _panel_text(role), _panel_kb(role == "super_admin"))
+    await safe_edit(call, panel_text(role), panel_kb(role == "super_admin"))
     await call.answer()
 
 
@@ -72,7 +78,7 @@ async def show_panel(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_admin_open(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     role = await get_role(call.from_user.id) or "admin"
-    await safe_edit(call, _panel_text(role), _panel_kb(role == "super_admin"))
+    await safe_edit(call, panel_text(role), panel_kb(role == "super_admin"))
     await call.answer()
 
 
