@@ -149,6 +149,22 @@ async def shop_admins(shop_id: int) -> list[int]:
     return [r["admin_tg_id"] for r in rows]
 
 
+async def shop_regular_admins(shop_id: int) -> list[int]:
+    """Админы сешки без супер-админов: только они считаются «админом сешки»
+    (кнопка «Задать вопрос сешке» и доставка вопросов)."""
+    async with pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT sa.admin_tg_id
+            FROM shop_assignments sa
+            JOIN admins a ON a.tg_id = sa.admin_tg_id
+            WHERE sa.shop_id = $1 AND a.role = 'admin'
+            """,
+            shop_id,
+        )
+    return [r["admin_tg_id"] for r in rows]
+
+
 async def visible_shop_ids(actor_tg_id: int) -> list[int] | None:
     """None — без ограничений (super_admin или не админ).
     Список ID — только эти магазины доступны (обычный admin)."""

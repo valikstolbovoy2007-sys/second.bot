@@ -1,6 +1,5 @@
 import html
 import logging
-from datetime import date
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -15,16 +14,15 @@ from aiogram.types import (
 
 from config import settings
 from data.repos.feedback_repo import save_feedback
-from data.repos.shops import get_shop, shop_has_price_schedule
-from data.repos.subs import is_subscribed, list_subscribed
+from data.repos.shops import get_shop
+from data.repos.subs import list_subscribed
 from data.repos.users import is_admin, upsert_user
-from keyboards.catalog_kb import CatalogCb, shop_card_kb
+from keyboards.catalog_kb import CatalogCb
 from keyboards.main_kb import main_menu
-from services.catalog import FLT_ALL, SORT_NAME
-from services.card_view import send_shop_card, show_shop_card, show_text_view
+from services.card_view import show_text_view
 from services.chat_journal import journal
 from services.chat_render import render, render_focus
-from services.maps import yandex_maps_url
+from services.shop_card_flow import redraw_shop_card, restore_card_fresh
 from services.texts import t
 from services.workspace import ws
 from states.feedback_states import FeedbackStates
@@ -196,53 +194,12 @@ async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
 
 async def _redraw_shop_card(call: CallbackQuery, user_id: int, data: dict) -> None:
     """Вернуть сообщение к карточке сешки («переброс» из репорт-флоу)."""
-    shop_id = data.get("shop_id")
-    if not shop_id:
-        try:
-            await call.message.delete()
-        except TelegramBadRequest:
-            pass
-        return
-    shop = await get_shop(int(shop_id))
-    if not shop:
-        return
-    tracked = await is_subscribed(user_id, shop.id)
-    has_prices = shop_has_price_schedule(shop)
-    kb = shop_card_kb(
-        shop.id, tracked,
-        src=data.get("src", "cat"),
-        page=data.get("page", 0),
-        flt=data.get("flt", FLT_ALL),
-        sort=data.get("sort", SORT_NAME),
-        has_prices=has_prices,
-        maps_url=yandex_maps_url(shop.address),
-    )
-    card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
-    ws.open_card(user_id, card_id)
+    await redraw_shop_card(call, user_id, data)
 
 
 async def _restore_card_fresh(message: Message, data: dict) -> None:
     """Cancel-фолбэк без колбэка: удалить прашивание и отправить карточку заново."""
-    shop_id = data.get("shop_id")
-    if not shop_id:
-        return
-    shop = await get_shop(int(shop_id))
-    if not shop:
-        return
-    user_id = await upsert_user(message.from_user.id, message.from_user.username)
-    tracked = await is_subscribed(user_id, shop.id)
-    has_prices = shop_has_price_schedule(shop)
-    kb = shop_card_kb(
-        shop.id, tracked,
-        src=data.get("src", "cat"),
-        page=data.get("page", 0),
-        flt=data.get("flt", FLT_ALL),
-        sort=data.get("sort", SORT_NAME),
-        has_prices=has_prices,
-        maps_url=yandex_maps_url(shop.address),
-    )
-    card_id = await send_shop_card(message.bot, message.chat.id, shop, date.today(), is_tracked=tracked, kb=kb)
-    ws.open_card(user_id, card_id)
+    await restore_card_fresh(message, data)
 
 
 @router.callback_query(CatalogCb.filter(F.action == "report"))

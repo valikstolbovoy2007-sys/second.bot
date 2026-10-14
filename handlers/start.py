@@ -10,11 +10,11 @@ from aiogram.types import CallbackQuery, Message
 from data.repos.shops import get_shop
 from data.repos.subs import is_subscribed
 from data.repos.users import is_admin, upsert_user
-from keyboards.catalog_kb import shop_card_kb
 from keyboards.main_kb import main_menu
 from services.card_view import send_shop_card
 from services.chat_journal import journal
 from services.chat_render import render, render_focus
+from services.shop_card_flow import shop_card_kb_for
 from services.texts import t
 from services.workspace import ws
 
@@ -49,7 +49,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 # остаётся только карточка — ничего не дублируется.
                 old_active = ws.active(message.from_user.id)
                 is_tracked = await is_subscribed(db_user_id, shop.id)
-                kb = shop_card_kb(shop.id, is_tracked=is_tracked, src="cat", page=0)
+                kb = await shop_card_kb_for(shop, is_tracked, src="cat", page=0)
                 card_id = await send_shop_card(
                     message.bot, message.chat.id, shop, date.today(),
                     is_tracked=is_tracked, kb=kb,

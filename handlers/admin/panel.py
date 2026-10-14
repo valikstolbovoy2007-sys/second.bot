@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from data.repos.admin_roles import get_role
 from handlers.admin.feedback import FbCb
 from handlers.admin.filters import IsAdmin
+from handlers.admin.questions import QCb
 from handlers.admin.shops import ShopCb
 from handlers.admin.ui import safe_edit
 from services.chat_render import render_focus
@@ -22,6 +23,7 @@ def panel_kb(is_super: bool) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🛍 Мои магазины", callback_data=ShopCb(action="list", page=0).pack())],
         [InlineKeyboardButton(text="📦 Завозы", callback_data="adm:arr:menu")],
+        [InlineKeyboardButton(text="❓ Вопросы", callback_data=QCb(action="list", page=0).pack())],
         [InlineKeyboardButton(text="📣 Рассылка", callback_data="adm:bc:menu")],
     ]
     if is_super:
@@ -51,6 +53,7 @@ def panel_text(role: str) -> str:
         "Ты управляешь только своими магазинами:\n"
         "• 🛍 редактируешь карточку (имя, адрес, описание, цикл, цены)\n"
         "• 📦 ставишь даты завозов\n"
+        "• ❓ отвечаешь на вопросы пользователей своей сешке\n"
         "• 📣 рассылаешь сообщения подписчикам своих магазинов\n\n"
         "<i>Если нужны новые магазины или другие права — попроси супер-админа.</i>"
     )

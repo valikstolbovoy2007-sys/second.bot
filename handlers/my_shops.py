@@ -5,7 +5,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup
 
-from data.repos.shops import Shop, get_shop, shop_has_price_schedule
+from data.repos.shops import Shop, get_shop
 from data.repos.subs import (
     count_subscriptions,
     is_subscribed,
@@ -16,12 +16,12 @@ from data.repos.subs import (
     unsubscribe_all,
 )
 from data.repos.users import upsert_user
-from keyboards.catalog_kb import TrackCb, shop_card_kb
+from keyboards.catalog_kb import TrackCb
 from keyboards.my_shops_kb import PAGE_SIZE, MyShopsCb, confirm_unsub_all_kb, my_shops_kb
 from services.card_render import today_marker
 from services.card_view import show_shop_card, show_text_view
 from services.chat_journal import journal
-from services.maps import yandex_maps_url
+from services.shop_card_flow import shop_card_kb_for
 from services.texts import t
 from services.workspace import ws
 
@@ -91,12 +91,7 @@ async def cb_shop(call: CallbackQuery, callback_data: MyShopsCb) -> None:
         await call.answer(await t("system.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = shop_has_price_schedule(shop)
-    kb = shop_card_kb(
-        shop.id, tracked, src="my", page=callback_data.page,
-        has_prices=has_prices,
-        maps_url=yandex_maps_url(shop.address),
-    )
+    kb = await shop_card_kb_for(shop, tracked, src="my", page=callback_data.page)
     # Список «превращается» в карточку на том же сообщении.
     card_id = await show_shop_card(call, shop, date.today(), is_tracked=tracked, kb=kb)
     ws.open_card(user_id, card_id)
@@ -150,15 +145,12 @@ async def cb_toggle(call: CallbackQuery, callback_data: TrackCb) -> None:
         msg = await t("myshops.added")
         new_tracked = True
 
-    has_prices = shop_has_price_schedule(shop)
-    kb = shop_card_kb(
-        shop.id, new_tracked,
+    kb = await shop_card_kb_for(
+        shop, new_tracked,
         src=callback_data.src,
         page=callback_data.page,
         flt=callback_data.flt,
         sort=callback_data.sort,
-        has_prices=has_prices,
-        maps_url=yandex_maps_url(shop.address),
     )
     card_id = await show_shop_card(call, shop, date.today(), is_tracked=new_tracked, kb=kb)
     ws.open_card(user_id, card_id)

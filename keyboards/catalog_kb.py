@@ -256,6 +256,7 @@ def shop_card_kb(
     has_prices: bool = False,
     maps_url: str = "",
     on_schedule: bool = False,
+    has_admin: bool = False,
 ) -> InlineKeyboardMarkup:
     """Клавиатура карточки магазина.
 
@@ -267,6 +268,9 @@ def shop_card_kb(
     `on_schedule` — True когда уже открыт экран «Расписание цен» для этого
     магазина: сама кнопка перехода туда не нужна, а «Назад» ведёт обратно
     к карточке магазина (`src` сохраняется).
+
+    `has_admin` — у сешки есть админ (без супер-админов): показываем кнопку
+    «Задать вопрос сешке».
     """
     track_text = "❌ Не отслеживать" if is_tracked else "💘 Отслеживать"
     rows: list[list[InlineKeyboardButton]] = [
@@ -282,6 +286,13 @@ def shop_card_kb(
             text="📋 Расписание цен",
             callback_data=CatalogCb(
                 action="sched", page=page, flt=flt, sort=sort, shop_id=shop_id, src=src,
+            ).pack(),
+        )])
+    if has_admin:
+        rows.append([InlineKeyboardButton(
+            text="❓ Задать вопрос сешке",
+            callback_data=CatalogCb(
+                action="ask", page=page, flt=flt, sort=sort, shop_id=shop_id, src=src,
             ).pack(),
         )])
     rows.append([InlineKeyboardButton(

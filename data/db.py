@@ -134,6 +134,28 @@ CREATE TABLE IF NOT EXISTS admin_messages (
     sent_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Вопросы сешке: кнопка на карточке магазина; уходит админам магазина,
+-- супер-админу — только для просмотра.
+CREATE TABLE IF NOT EXISTS questions (
+    id          SERIAL PRIMARY KEY,
+    user_id     INT REFERENCES users(id) ON DELETE SET NULL,
+    shop_id     INT NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+    text        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','in_progress','closed')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS questions_shop_idx ON questions(shop_id, status);
+
+CREATE TABLE IF NOT EXISTS question_messages (
+    id          SERIAL PRIMARY KEY,
+    question_id INT REFERENCES questions(id) ON DELETE CASCADE,
+    from_tg_id  BIGINT NOT NULL,
+    to_tg_id    BIGINT NOT NULL,
+    text        TEXT NOT NULL,
+    sent_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS question_messages_q_idx ON question_messages(question_id);
+
 CREATE TABLE IF NOT EXISTS broadcasts (
     id              SERIAL PRIMARY KEY,
     payload         JSONB NOT NULL,

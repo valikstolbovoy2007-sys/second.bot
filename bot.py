@@ -17,6 +17,7 @@ from handlers import (
     errors,
     feedback,
     my_shops,
+    questions,
     settings as settings_handlers,
     start,
 )
@@ -66,6 +67,7 @@ async def main() -> None:
     dp.include_router(superadmin.router)
     dp.include_router(admin.router)
     dp.include_router(feedback.router)
+    dp.include_router(questions.router)
     dp.include_router(start.router)
     dp.include_router(catalog.router)
     dp.include_router(my_shops.router)

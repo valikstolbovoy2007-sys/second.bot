@@ -16,7 +16,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from data.repos.shops import Shop, get_shop, list_active_shops, shop_has_price_schedule
+from data.repos.shops import Shop, get_shop, list_active_shops
 from data.repos.subs import is_subscribed, subscribed_shop_ids
 from data.repos.users import upsert_user
 from keyboards.catalog_kb import (
@@ -28,14 +28,13 @@ from keyboards.catalog_kb import (
     empty_filter_kb,
     more_filters_kb,
     search_cancel_kb,
-    shop_card_kb,
     sort_kb,
 )
 from services.card_render import format_price_schedule, phase_marker
 from services.card_view import show_shop_card, show_text_view
 from services.chat_journal import journal
 from services.chat_render import render
-from services.maps import yandex_maps_url
+from services.shop_card_flow import shop_card_kb_for
 from services.workspace import ws
 from services.catalog import (
     FLT_ALL,
@@ -296,12 +295,9 @@ async def cb_shop(call: CallbackQuery, callback_data: CatalogCb) -> None:
         await call.answer(await t("catalog.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = shop_has_price_schedule(shop)
-    kb = shop_card_kb(
-        shop.id, tracked, src=callback_data.src,
+    kb = await shop_card_kb_for(
+        shop, tracked, src=callback_data.src,
         page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
-        has_prices=has_prices,
-        maps_url=yandex_maps_url(shop.address),
     )
     # Список «превращается» в карточку на том же сообщении (delete+send
     # для text->photo — Telegram не умеет морфить это на месте).
@@ -318,15 +314,12 @@ async def cb_schedule(call: CallbackQuery, callback_data: CatalogCb) -> None:
         await call.answer(await t("catalog.shop_not_found"), show_alert=True)
         return
     tracked = await is_subscribed(user_id, shop.id)
-    has_prices = shop_has_price_schedule(shop)
     new_id = await show_text_view(
         call,
         format_price_schedule(shop, date.today()),
-        shop_card_kb(
-            shop.id, tracked, src=callback_data.src,
+        await shop_card_kb_for(
+            shop, tracked, src=callback_data.src,
             page=callback_data.page, flt=callback_data.flt, sort=callback_data.sort,
-            has_prices=has_prices,
-            maps_url=yandex_maps_url(shop.address),
             on_schedule=True,
         ),
     )

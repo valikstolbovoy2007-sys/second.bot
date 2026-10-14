@@ -8,6 +8,7 @@ from handlers.admin import (
     legacy,
     panel,
     parsers,
+    questions,
     shops,
     shops_extra,
     stats,
@@ -22,6 +23,7 @@ router.include_router(add_shop.router)
 router.include_router(arrivals.router)
 router.include_router(broadcasts.router)
 router.include_router(feedback.router)
+router.include_router(questions.router)
 router.include_router(parsers.router)
 router.include_router(stats.router)
 router.include_router(users.router)
