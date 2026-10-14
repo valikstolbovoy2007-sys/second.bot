@@ -128,11 +128,17 @@ def _schedule_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def _confirm_kb() -> InlineKeyboardMarkup:
+def _confirm_kb(needs_review: bool = False) -> InlineKeyboardMarkup:
+    label = "📤 Отправить на одобрение" if needs_review else "✅ Поставить в очередь"
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Поставить в очередь", callback_data=BcCb(action="enqueue").pack()),
+        InlineKeyboardButton(text=label, callback_data=BcCb(action="enqueue").pack()),
         InlineKeyboardButton(text="✖️ Отмена", callback_data="adm:bc:menu"),
     ]])
+
+
+async def _needs_review(actor_tg_id: int) -> bool:
+    """Обычному админу рассылка уходит на модерацию к супер-админу."""
+    return not await is_super_admin(actor_tg_id) and bool(settings.ADMIN_CHAT_ID)
 
 
 async def _render_menu(obj, state: FSMContext) -> None:
@@ -528,13 +534,17 @@ async def _build_preview(state: FSMContext, actor_tg_id: int) -> tuple[str, dict
 async def _go_confirm(call: CallbackQuery, state: FSMContext) -> None:
     text, _ = await _build_preview(state, call.from_user.id)
     await state.set_state(BroadcastStates.confirm)
-    await render_screen_call(call, state, text, _confirm_kb())
+    await render_screen_call(
+        call, state, text, _confirm_kb(await _needs_review(call.from_user.id)),
+    )
 
 
 async def _go_confirm_msg(message: Message, state: FSMContext) -> None:
     text, _ = await _build_preview(state, message.from_user.id)
     await state.set_state(BroadcastStates.confirm)
-    await render_screen_msg(message, state, text, _confirm_kb())
+    await render_screen_msg(
+        message, state, text, _confirm_kb(await _needs_review(message.from_user.id)),
+    )
 
 
 @router.callback_query(BroadcastStates.confirm, BcCb.filter(F.action == "enqueue"))
@@ -567,7 +577,7 @@ async def cb_enqueue(call: CallbackQuery, state: FSMContext) -> None:
             sched_dt = datetime.fromisoformat(sched_str)
         except ValueError:
             sched_dt = None
-    needs_review = not await is_super_admin(call.from_user.id) and bool(settings.ADMIN_CHAT_ID)
+    needs_review = await _needs_review(call.from_user.id)
     bc_id = await enqueue(
         payload=info["payload"],
         audience_filter=info["audience"],

@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS broadcasts (
     audience_filter JSONB NOT NULL,
     scheduled_at    TIMESTAMPTZ,
     status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','running','paused','done','cancelled','failed')),
+                    CHECK (status IN ('pending','pending_review','running','paused','done','cancelled','failed')),
     sent            INT NOT NULL DEFAULT 0,
     failed          INT NOT NULL DEFAULT 0,
     started_at      TIMESTAMPTZ,
@@ -256,6 +256,10 @@ ALTER TABLE feedback        ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAUL
 ALTER TABLE feedback        ADD COLUMN IF NOT EXISTS assigned_to BIGINT;
 ALTER TABLE admin_messages  ADD COLUMN IF NOT EXISTS feedback_id INT REFERENCES feedback(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS admin_messages_fb_idx ON admin_messages(feedback_id);
+-- Модерация рассылок обычных админов: статус pending_review.
+ALTER TABLE broadcasts DROP CONSTRAINT IF EXISTS broadcasts_status_check;
+ALTER TABLE broadcasts ADD CONSTRAINT broadcasts_status_check
+    CHECK (status IN ('pending','pending_review','running','paused','done','cancelled','failed'));
 ALTER TABLE questions       ADD COLUMN IF NOT EXISTS photo_id TEXT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_start INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_step  INT;
