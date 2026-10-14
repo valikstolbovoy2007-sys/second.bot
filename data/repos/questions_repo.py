@@ -1,11 +1,11 @@
 from data.db import pool
 
 
-async def save_question(user_id: int, shop_id: int, text: str) -> int:
+async def save_question(user_id: int, shop_id: int, text: str, photo_id: str | None = None) -> int:
     async with pool().acquire() as conn:
         return int(await conn.fetchval(
-            "INSERT INTO questions (user_id, shop_id, text) VALUES ($1, $2, $3) RETURNING id",
-            user_id, shop_id, text,
+            "INSERT INTO questions (user_id, shop_id, text, photo_id) VALUES ($1, $2, $3, $4) RETURNING id",
+            user_id, shop_id, text, photo_id,
         ))
 
 
@@ -13,7 +13,7 @@ async def get_question(q_id: int) -> dict | None:
     async with pool().acquire() as conn:
         r = await conn.fetchrow(
             """
-            SELECT q.id, q.user_id, q.shop_id, q.text, q.status, q.created_at,
+            SELECT q.id, q.user_id, q.shop_id, q.text, q.photo_id, q.status, q.created_at,
                    u.tg_id, u.username, s.name AS shop_name
             FROM questions q
             LEFT JOIN users u ON u.id = q.user_id

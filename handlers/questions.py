@@ -239,7 +239,9 @@ async def q_send(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await state.clear()
     user_id = await upsert_user(call.from_user.id, call.from_user.username)
     shop = await get_shop(int(data["shop_id"])) if data.get("shop_id") else None
-    q_id = await save_question(user_id, data["shop_id"], text)
+    q_id = await save_question(
+        user_id, data["shop_id"], text, photo_id=data.get("q_photo_id"),
+    )
     if shop:
         await _notify_question_admins(
             bot, q_id=q_id, shop=shop,

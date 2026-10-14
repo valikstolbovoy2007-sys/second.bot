@@ -85,7 +85,8 @@ async def _fetch_q_target(q_id: int):
     async with pool().acquire() as conn:
         return await conn.fetchrow(
             """
-            SELECT u.tg_id, u.username, q.text, q.created_at, q.shop_id, s.name AS shop_name
+            SELECT u.tg_id, u.username, q.text, q.photo_id, q.created_at, q.shop_id,
+                   s.name AS shop_name
             FROM questions q
             JOIN users u ON u.id = q.user_id
             LEFT JOIN shops s ON s.id = q.shop_id
@@ -93,6 +94,36 @@ async def _fetch_q_target(q_id: int):
             """,
             q_id,
         )
+
+
+async def _render_question(
+    bot: Bot, chat_id: int, message_id: int, text: str,
+    kb: InlineKeyboardMarkup, photo_id: str | None,
+) -> int:
+    """Отрисовать карточку вопроса: с фото — фото-сообщением (подпись —
+    карточка, лимит 1024), без фото — обычным текстом через render."""
+    if not photo_id:
+        return await render(bot, chat_id, message_id, text, kb)
+    caption = text if len(text) <= 1024 else text[:1020] + "…"
+    try:
+        # Уже фото-сообщение (уведомление в ЛС / карточка) — правим подпись.
+        await bot.edit_message_caption(
+            chat_id=chat_id, message_id=message_id,
+            caption=caption, reply_markup=kb,
+        )
+        return message_id
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            return message_id
+    # Текстовое сообщение (список) или чужое медиа — заменяем на фото.
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except TelegramBadRequest:
+        pass
+    journal.drop_below(chat_id, message_id)
+    sent = await bot.send_photo(chat_id, photo_id, caption=caption, reply_markup=kb)
+    journal.record(chat_id, sent.message_id)
+    return sent.message_id
 
 
 async def _open_question(
@@ -110,7 +141,7 @@ async def _open_question(
     async with pool().acquire() as conn:
         row = await conn.fetchrow(
             f"""
-            SELECT q.id, q.text, q.status, q.created_at, q.shop_id,
+            SELECT q.id, q.text, q.photo_id, q.status, q.created_at, q.shop_id,
                    u.tg_id AS user_tg, u.username, s.name AS shop_name
             FROM questions q
             LEFT JOIN users u ON u.id = q.user_id
@@ -137,6 +168,10 @@ async def _open_question(
         f"Магазин: <b>{html.escape(row['shop_name'] or '—')}</b>",
         f"От: @{row['username'] or '—'} ({row['user_tg']})",
         f"Создано: {row['created_at'].strftime('%d.%m %H:%M')}",
+    ]
+    if row['photo_id']:
+        parts.append("📷 <i>Фото прикреплено</i>")
+    parts += [
         "────────────────",
         html.escape(row['text']),
     ]
@@ -165,7 +200,10 @@ async def _open_question(
         rows.append([InlineKeyboardButton(
             text="← К списку", callback_data=QCb(action="list", page=page).pack(),
         )])
-    return await render(bot, chat_id, message_id, text, InlineKeyboardMarkup(inline_keyboard=rows))
+    return await _render_question(
+        bot, chat_id, message_id, text, InlineKeyboardMarkup(inline_keyboard=rows),
+        row['photo_id'],
+    )
 
 
 @router.callback_query(QCb.filter(F.action == "list"))
@@ -177,7 +215,7 @@ async def cb_list(call: CallbackQuery, callback_data: QCb) -> None:
     async with pool().acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT q.id, q.text, q.status, q.created_at, q.shop_id,
+            SELECT q.id, q.text, q.photo_id, q.status, q.created_at, q.shop_id,
                    u.tg_id AS user_tg, u.username, s.name AS shop_name
             FROM questions q
             LEFT JOIN users u ON u.id = q.user_id
@@ -207,9 +245,10 @@ async def cb_list(call: CallbackQuery, callback_data: QCb) -> None:
         emoji = {"new": "🆕", "in_progress": "🔄", "closed": "✅"}.get(r["status"], "•")
         preview = (r["text"] or "")[:60].replace("\n", " ")
         shop = html.escape(r["shop_name"] or "—")
-        lines.append(f"{emoji} #{r['id']} [{shop}] от @{r['username'] or r['user_tg'] or '—'}: {html.escape(preview)}")
+        photo = "📷 " if r["photo_id"] else ""
+        lines.append(f"{emoji} #{r['id']} {photo}[{shop}] от @{r['username'] or r['user_tg'] or '—'}: {html.escape(preview)}")
         btn_rows.append([InlineKeyboardButton(
-            text=f"{emoji} #{r['id']} {r['shop_name'] or ''}"[:60],
+            text=f"{emoji}{' 📷' if r['photo_id'] else ''} #{r['id']} {r['shop_name'] or ''}"[:60],
             callback_data=QCb(action="open", q_id=r["id"], page=page).pack(),
         )])
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -392,7 +431,14 @@ async def cb_reply_send(call: CallbackQuery, callback_data: QCb, state: FSMConte
     parts.append(reply_text)
     if target["tg_id"] != call.from_user.id:
         try:
-            sent = await bot.send_message(target["tg_id"], "\n".join(parts))
+            body = "\n".join(parts)
+            if target.get("photo_id"):
+                # Ответ прикладывается к фото вопроса — пользователь видит
+                # свой снимок и ответ вместе.
+                caption = body if len(body) <= 1024 else body[:1020] + "…"
+                sent = await bot.send_photo(target["tg_id"], target["photo_id"], caption=caption)
+            else:
+                sent = await bot.send_message(target["tg_id"], body)
             journal.record(target["tg_id"], sent.message_id)
         except Exception as exc:
             log.exception("question reply failed")

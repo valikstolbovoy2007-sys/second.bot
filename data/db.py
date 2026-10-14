@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS questions (
     user_id     INT REFERENCES users(id) ON DELETE SET NULL,
     shop_id     INT NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
     text        TEXT NOT NULL,
+    photo_id    TEXT,
     status      TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','in_progress','closed')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -255,6 +256,7 @@ ALTER TABLE feedback        ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAUL
 ALTER TABLE feedback        ADD COLUMN IF NOT EXISTS assigned_to BIGINT;
 ALTER TABLE admin_messages  ADD COLUMN IF NOT EXISTS feedback_id INT REFERENCES feedback(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS admin_messages_fb_idx ON admin_messages(feedback_id);
+ALTER TABLE questions       ADD COLUMN IF NOT EXISTS photo_id TEXT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_start INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS price_step  INT;
 ALTER TABLE shops           ADD COLUMN IF NOT EXISTS working_hours TEXT;
