@@ -19,8 +19,10 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -61,6 +63,11 @@ TZ = ZoneInfo("Europe/Moscow")
 class BcCb(CallbackData, prefix="admbc"):
     action: str
     value: str | None = None
+
+
+class ReviewStates(StatesGroup):
+    """Супер-админ вводит причину запрета рассылки (после «⛔️ Запретить»)."""
+    deny_reason = State()
 
 
 # ---------- menu ----------
@@ -597,35 +604,47 @@ async def _send_review_request(bot: Bot, bc_id: int) -> None:
     if not bc or not settings.ADMIN_CHAT_ID:
         return
     try:
-        snippet = html.escape((bc.payload.get("text") or "").replace("\n", " ")[:300])
-        media = "📷 фото" if bc.payload.get("photo") else (
-            "📎 документ" if bc.payload.get("document") else "—")
+        text = bc.payload.get("text") or ""
+        photo = bc.payload.get("photo")
+        doc = bc.payload.get("document")
         sched = "сейчас" if not bc.scheduled_at else bc.scheduled_at.strftime("%d.%m %H:%M")
-        text = (
-            "🕓 <b>Запрос на рассылку</b>\n\n"
+        header = (
+            f"🕓 <b>Одобрение рассылки #{bc_id}</b>\n\n"
             f"Автор: <code>{bc.created_by}</code>\n"
             f"Аудитория: {_format_audience(bc.audience_filter)}\n"
-            f"Медиа: {media}\n"
             f"Время: {sched}\n\n"
-            f"<b>Текст:</b>\n{snippet}"
+            f"<b>Текст:</b>\n{html.escape(text)}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Одобрить", callback_data=BcCb(action="approve", value=str(bc_id)).pack()),
             InlineKeyboardButton(text="⛔️ Запретить", callback_data=BcCb(action="deny", value=str(bc_id)).pack()),
         ]])
-        sent = await bot.send_message(settings.ADMIN_CHAT_ID, text, reply_markup=kb)
+        # Лимит подписи к медиа — 1024; к обычному сообщению — 4096.
+        cap_limit = 1024 if (photo or doc) else 4000
+        caption = header if len(header) <= cap_limit else header[: cap_limit - 1] + "…"
+        if photo:
+            sent = await bot.send_photo(settings.ADMIN_CHAT_ID, photo, caption=caption, reply_markup=kb)
+        elif doc:
+            sent = await bot.send_document(settings.ADMIN_CHAT_ID, doc, caption=caption, reply_markup=kb)
+        else:
+            sent = await bot.send_message(settings.ADMIN_CHAT_ID, caption, reply_markup=kb)
         journal.record(settings.ADMIN_CHAT_ID, sent.message_id)
     except Exception:
         log.exception("failed to send broadcast review request for %s", bc_id)
 
 
-async def _notify_creator(bot: Bot, bc_id: int, ok: bool) -> None:
+async def _notify_creator(bot: Bot, bc_id: int, ok: bool, reason: str | None = None) -> None:
     bc = await get(bc_id)
     if not bc:
         return
     try:
-        msg = (f"✅ Твоя рассылка #{bc_id} одобрена супер-админом."
-               if ok else f"⛔️ Твоя рассылка #{bc_id} отклонена супер-админом.")
+        if ok:
+            msg = (f"✅ Рассылка #{bc_id} одобрена супер-админом.\n"
+                   f"Она встала в очередь отправки.")
+        else:
+            msg = f"⛔️ Рассылка #{bc_id} запрещена супер-админом."
+            if reason:
+                msg += f"\n\n<b>Причина:</b>\n{html.escape(reason)}"
         sent = await bot.send_message(bc.created_by, msg)
         journal.record(bc.created_by, sent.message_id)
     except TelegramBadRequest:
@@ -663,7 +682,7 @@ async def cb_approve(call: CallbackQuery, callback_data: BcCb, bot: Bot) -> None
 
 
 @router.callback_query(BcCb.filter(F.action == "deny"))
-async def cb_deny(call: CallbackQuery, callback_data: BcCb, bot: Bot) -> None:
+async def cb_deny(call: CallbackQuery, callback_data: BcCb, bot: Bot, state: FSMContext) -> None:
     if not await is_super_admin(call.from_user.id):
         await call.answer("Только супер-админ", show_alert=True)
         return
@@ -679,15 +698,59 @@ async def cb_deny(call: CallbackQuery, callback_data: BcCb, bot: Bot) -> None:
     if bc.status != "pending_review":
         await call.answer("Уже обработана", show_alert=True)
         return
-    await request_cancel(bc_id)
-    await audit_write(call.from_user.id, "broadcast.deny", "broadcast", bc_id)
+    # Запрет — с причиной: просим написать её текстом, запрос из чата
+    # удалим после ввода (вместе с решением).
+    await state.set_state(ReviewStates.deny_reason)
+    await state.update_data(
+        bc_id=bc_id,
+        review_chat_id=call.message.chat.id,
+        review_msg_id=call.message.message_id,
+    )
+    await call.answer()
+    await bot.send_message(
+        call.message.chat.id,
+        f"⛔️ <b>Запрет рассылки #{bc_id}</b>\n\n"
+        "Напиши причину — она уйдёт автору рассылки.\n\n"
+        "<i>Отменить — /cancel</i>",
+    )
+
+
+@router.message(ReviewStates.deny_reason, Command("cancel"))
+async def msg_deny_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
     try:
-        await bot.delete_message(call.message.chat.id, call.message.message_id)
-        journal.remove(call.message.chat.id, call.message.message_id)
+        await message.delete()
     except TelegramBadRequest:
         pass
-    await _notify_creator(bot, bc_id, ok=False)
-    await call.answer("⛔️ Запрещена")
+
+
+@router.message(ReviewStates.deny_reason, F.text)
+async def msg_deny_reason(message: Message, state: FSMContext, bot: Bot) -> None:
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.answer("⚠️ Причина не может быть пустой. Напиши текст.")
+        return
+    data = await state.get_data()
+    await state.clear()
+    bc_id = int(data.get("bc_id") or 0)
+    bc = await get(bc_id)
+    if bc and bc.status == "pending_review":
+        await request_cancel(bc_id)
+        await audit_write(
+            message.from_user.id, "broadcast.deny", "broadcast", bc_id,
+            {"reason": reason},
+        )
+    # Запрос убираем из чата обратной связи — решение принято.
+    try:
+        await bot.delete_message(data["review_chat_id"], data["review_msg_id"])
+        journal.remove(data["review_chat_id"], data["review_msg_id"])
+    except (TelegramBadRequest, KeyError, TypeError):
+        pass
+    await _notify_creator(bot, bc_id, ok=False, reason=reason)
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
 
 
 # ---------- history ----------
